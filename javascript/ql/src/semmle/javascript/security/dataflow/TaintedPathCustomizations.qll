@@ -654,7 +654,7 @@ module TaintedPath {
       )
     )
     or
-    promiseTaintStep(src, dst) and srclabel = dstlabel
+    TaintTracking::promiseStep(src, dst) and srclabel = dstlabel
     or
     TaintTracking::persistentStorageStep(src, dst) and srclabel = dstlabel
     or
