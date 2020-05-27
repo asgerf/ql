@@ -1,9 +1,7 @@
 package com.semmle.js.extractor;
 
-import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.io.Reader;
 import java.io.Writer;
 import java.lang.ProcessBuilder.Redirect;
@@ -217,7 +215,7 @@ public class AutoBuild {
   private final VirtualSourceRoot virtualSourceRoot;
   private ExtractorState state;
 
-  /** The default timeout when running <code>yarn</code>, in milliseconds. */
+  /** The default timeout when installing dependencies, in milliseconds. */
   public static final int INSTALL_DEPENDENCIES_DEFAULT_TIMEOUT = 10 * 60 * 1000; // 10 minutes
 
   public AutoBuild() {
@@ -690,28 +688,6 @@ public class AutoBuild {
     return false;
   }
 
-  /** Returns true if yarn is installed, otherwise prints a warning and returns false. */
-  private boolean verifyYarnInstallation() {
-    ProcessBuilder pb = new ProcessBuilder(Arrays.asList("yarn", "-v"));
-    try {
-      Process process = pb.start();
-      boolean completed = process.waitFor(this.installDependenciesTimeout, TimeUnit.MILLISECONDS);
-      if (!completed) {
-        System.err.println("Yarn could not be launched. Timeout during 'yarn -v'.");
-        return false;
-      }
-      BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
-      String version = reader.readLine();
-      System.out.println("Found yarn version: " + version);
-      return true;
-    } catch (IOException | InterruptedException ex) {
-      System.err.println(
-          "Yarn not found. Please put 'yarn' on the PATH for automatic dependency installation.");
-      Exceptions.ignore(ex, "Continue without dependency installation");
-      return false;
-    }
-  }
-
   /**
    * Returns an existing file named <code>dir/stem.ext</code> where <code>.ext</code> is any
    * of the given extensions, or <code>null</code> if no such file exists.
@@ -770,7 +746,7 @@ public class AutoBuild {
    * Downloaded packages are intalled under <tt>SCRATCH_DIR</tt>, in a mirrored directory hierarchy
    * we call the "virtual source root".
    * Each <tt>package.json</tt> file is rewritten and copied to the virtual source root,
-   * where <tt>yarn install</tt> is invoked.
+   * where <tt>dependency_installer.js</tt> is invoked (emulating <tt>npm install</tt>).
    * <p>
    * Packages that exists within the repo are stripped from the dependencies
    * before installation, so they are not downloaded. Since they are part of the main source tree,
