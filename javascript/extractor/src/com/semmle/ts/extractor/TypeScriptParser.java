@@ -2,7 +2,6 @@ package com.semmle.ts.extractor;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
-import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
@@ -32,19 +31,18 @@ import com.semmle.js.extractor.DependencyInstallationResult;
 import com.semmle.js.extractor.EnvironmentVariables;
 import com.semmle.js.extractor.ExtractionMetrics;
 import com.semmle.js.extractor.VirtualSourceRoot;
+import com.semmle.js.nodeinterop.NodeInterop;
 import com.semmle.js.parser.JSParser;
-import com.semmle.js.parser.ParsedProject;
 import com.semmle.js.parser.JSParser.Result;
+import com.semmle.js.parser.ParsedProject;
 import com.semmle.util.data.StringUtil;
 import com.semmle.util.data.UnitParser;
 import com.semmle.util.exception.CatastrophicError;
 import com.semmle.util.exception.Exceptions;
-import com.semmle.util.exception.InterruptedError;
 import com.semmle.util.exception.ResourceError;
 import com.semmle.util.exception.UserError;
 import com.semmle.util.logging.LogbackUtils;
 import com.semmle.util.process.AbstractProcessBuilder;
-import com.semmle.util.process.Builder;
 import com.semmle.util.process.Env;
 
 import ch.qos.logback.classic.Level;
@@ -70,31 +68,6 @@ public class TypeScriptParser {
    * wrapper when running without SEMMLE_DIST.
    */
   public static final String PARSER_WRAPPER_PATH_ENV_VAR = "SEMMLE_TYPESCRIPT_PARSER_WRAPPER";
-
-  /**
-   * An environment variable that can be set to indicate the location of the Node.js runtime, as an
-   * alternative to adding Node to the PATH.
-   */
-  public static final String TYPESCRIPT_NODE_RUNTIME_VAR = "SEMMLE_TYPESCRIPT_NODE_RUNTIME";
-
-  /**
-   * An environment variable that can be set to provide additional arguments to the Node.js runtime
-   * each time it is invoked. Arguments should be separated by spaces.
-   */
-  public static final String TYPESCRIPT_NODE_RUNTIME_EXTRA_ARGS_VAR =
-      "SEMMLE_TYPESCRIPT_NODE_RUNTIME_EXTRA_ARGS";
-
-  /**
-   * An environment variable that can be set to specify a timeout to use when verifying the
-   * TypeScript installation, in milliseconds. Default is 10000.
-   */
-  public static final String TYPESCRIPT_TIMEOUT_VAR = "SEMMLE_TYPESCRIPT_TIMEOUT";
-
-  /**
-   * An environment variable that can be set to specify a number of retries when verifying
-   * the TypeScript installation. Default is 3.
-   */
-  public static final String TYPESCRIPT_RETRIES_VAR = "SEMMLE_TYPESCRIPT_RETRIES";
 
   /**
    * An environment variable (without the <tt>SEMMLE_</tt> or <tt>LGTM_</tt> prefix), that can be
@@ -145,18 +118,6 @@ public class TypeScriptParser {
   private BufferedWriter toParserWrapper;
 
   private BufferedReader fromParserWrapper;
-
-  private String nodeJsVersionString;
-
-  /** Command to launch the Node.js runtime. Initialised by {@link #verifyNodeInstallation}. */
-  private String nodeJsRuntime;
-
-  /**
-   * Arguments to pass to the Node.js runtime each time it is invoked. Initialised by {@link
-   * #verifyNodeInstallation}.
-   */
-  private List<String> nodeJsRuntimeExtraArgs = Collections.emptyList();
-
   /** If non-zero, we use this instead of relying on the corresponding environment variable. */
   private int typescriptRam = 0;
 
@@ -166,111 +127,6 @@ public class TypeScriptParser {
   /** Sets the amount of RAM to allocate to the TypeScript compiler.s */
   public void setTypescriptRam(int megabytes) {
     this.typescriptRam = megabytes;
-  }
-
-  /**
-   * Verifies that Node.js and TypeScript are installed and throws an exception otherwise.
-   *
-   * @param verbose if true, log the Node.js executable path, version strings, and any additional
-   *     arguments.
-   */
-  public void verifyInstallation(boolean verbose) {
-    verifyNodeInstallation();
-    if (verbose) {
-      System.out.println("Found Node.js at: " + nodeJsRuntime);
-      System.out.println("Found Node.js version: " + nodeJsVersionString);
-      if (!nodeJsRuntimeExtraArgs.isEmpty()) {
-        System.out.println("Additional arguments for Node.js: " + nodeJsRuntimeExtraArgs);
-      }
-    }
-  }
-
-  /** Checks that Node.js is installed and can be run and returns its version string. */
-  public String verifyNodeInstallation() {
-    if (nodeJsVersionString != null) return nodeJsVersionString;
-
-    // Determine where to find the Node.js runtime.
-    String explicitNodeJsRuntime = Env.systemEnv().get(TYPESCRIPT_NODE_RUNTIME_VAR);
-    if (explicitNodeJsRuntime != null) {
-      // Use the specified Node.js executable.
-      nodeJsRuntime = explicitNodeJsRuntime;
-    } else {
-      // Look for `node` on the PATH.
-      nodeJsRuntime = "node";
-    }
-
-    // Determine any additional arguments to be passed to Node.js each time it's called.
-    String extraArgs = Env.systemEnv().get(TYPESCRIPT_NODE_RUNTIME_EXTRA_ARGS_VAR);
-    if (extraArgs != null) {
-      nodeJsRuntimeExtraArgs = Arrays.asList(extraArgs.split("\\s+"));
-    }
-
-    // Run 'node --version' with a timeout, and retry a few times if it times out.
-    // If the Java process is suspended we may get a spurious timeout, and we want to
-    // support long suspensions in cloud environments. Instead of setting a huge timeout,
-    // retrying guarantees we can survive arbitrary suspensions as long as they don't happen
-    // too many times in rapid succession.
-    int timeout = Env.systemEnv().getInt(TYPESCRIPT_TIMEOUT_VAR, 10000);
-    int numRetries = Env.systemEnv().getInt(TYPESCRIPT_RETRIES_VAR, 3);
-    for (int i = 0; i < numRetries - 1; ++i) {
-      try {
-        return startNodeAndGetVersion(timeout);
-      } catch (InterruptedError e) {
-        Exceptions.ignore(e, "We will retry the call that caused this exception.");
-        System.err.println("Starting Node.js seems to take a long time. Retrying.");
-      }
-    }
-    try {
-      return startNodeAndGetVersion(timeout);
-    } catch (InterruptedError e) {
-      Exceptions.ignore(e, "Exception details are not important.");
-      throw new CatastrophicError(
-          "Could not start Node.js (timed out after " + (timeout / 1000) + "s and " + numRetries + " attempts");
-    }
-  }
-
-  /**
-   * Checks that Node.js is installed and can be run and returns its version string.
-   */
-  private String startNodeAndGetVersion(int timeout) throws InterruptedError {
-    ByteArrayOutputStream out = new ByteArrayOutputStream();
-    ByteArrayOutputStream err = new ByteArrayOutputStream();
-    Builder b =
-        new Builder(
-            getNodeJsRuntimeInvocation("--version"), out, err, getParserWrapper().getParentFile());
-    b.expectFailure(); // We want to do our own logging in case of an error.
-
-    try {
-      int r = b.execute(timeout);
-      String stdout = new String(out.toByteArray());
-      String stderr = new String(err.toByteArray());
-      if (r != 0 || stdout.length() == 0) {
-        throw new CatastrophicError(
-            "Could not start Node.js. It is required for TypeScript extraction.\n" + stderr);
-      }
-      return nodeJsVersionString = stdout;
-    } catch (ResourceError e) {
-      // In case 'node' is not found, the process builder converts the IOException
-      // into a ResourceError.
-      Exceptions.ignore(e, "We rewrite this into a UserError");
-      throw new UserError(
-          "Could not start Node.js. It is required for TypeScript extraction."
-              + "\nPlease install Node.js and ensure 'node' is on the PATH.");
-    }
-  }
-
-  /**
-   * Gets a command line to invoke the Node.js runtime. Any arguments in {@link
-   * TypeScriptParser#nodeJsRuntimeExtraArgs} are passed first, followed by those in {@code args}.
-   */
-  private List<String> getNodeJsRuntimeInvocation(String... args) {
-    List<String> result = new ArrayList<>();
-    result.add(nodeJsRuntime);
-    result.addAll(nodeJsRuntimeExtraArgs);
-    for (String arg : args) {
-      result.add(arg);
-    }
-    return result;
   }
 
   private static int getMegabyteCountFromPrefixedEnv(String suffix, int defaultValue) {
@@ -292,7 +148,7 @@ public class TypeScriptParser {
 
   /** Start the Node.js parser wrapper process. */
   private void setupParserWrapper() {
-    verifyNodeInstallation();
+    NodeInterop.verifyNodeInstallation();
 
     int mainMemoryMb =
         typescriptRam != 0
@@ -314,7 +170,7 @@ public class TypeScriptParser {
       }
     }
 
-    List<String> cmd = getNodeJsRuntimeInvocation();
+    List<String> cmd = NodeInterop.getNodeJsRuntimeInvocation();
     cmd.add("--max_old_space_size=" + (mainMemoryMb + reserveMemoryMb));
     cmd.addAll(debugFlags);
     cmd.add(parserWrapper.getAbsolutePath());

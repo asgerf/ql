@@ -45,6 +45,7 @@ import com.semmle.js.extractor.FileExtractor.FileType;
 import com.semmle.js.extractor.trapcache.DefaultTrapCache;
 import com.semmle.js.extractor.trapcache.DummyTrapCache;
 import com.semmle.js.extractor.trapcache.ITrapCache;
+import com.semmle.js.nodeinterop.NodeInterop;
 import com.semmle.js.parser.ParsedProject;
 import com.semmle.ts.extractor.TypeExtractor;
 import com.semmle.ts.extractor.TypeScriptParser;
@@ -1127,9 +1128,9 @@ protected DependencyInstallationResult preparePackagesAndDependencies(Set<Path> 
     }
   }
 
-  /** Verifies that Node.js and the TypeScript compiler are installed and can be found. */
+  /** Verifies that the requirements for TypeScript extractions are installed. */
   public void verifyTypeScriptInstallation(ExtractorState extractorState) {
-    extractorState.getTypeScriptParser().verifyInstallation(true);
+    NodeInterop.verifyInstallation(true); // TypeScript requires Node.js to be installed.
   }
 
   public void extractTypeScriptFiles(

@@ -18,6 +18,7 @@ import com.semmle.js.extractor.FileExtractor.FileType;
 import com.semmle.js.extractor.trapcache.DefaultTrapCache;
 import com.semmle.js.extractor.trapcache.DummyTrapCache;
 import com.semmle.js.extractor.trapcache.ITrapCache;
+import com.semmle.js.nodeinterop.NodeInterop;
 import com.semmle.js.parser.ParsedProject;
 import com.semmle.ts.extractor.TypeExtractor;
 import com.semmle.ts.extractor.TypeScriptParser;
@@ -157,7 +158,7 @@ public class Main {
     TypeScriptParser tsParser = extractorState.getTypeScriptParser();
     tsParser.setTypescriptRam(extractorConfig.getTypeScriptRam());
     if (containsTypeScriptFiles()) {
-      tsParser.verifyInstallation(!ap.has(P_QUIET));
+      NodeInterop.verifyInstallation(!ap.has(P_QUIET));
     }
 
     for (File projectFile : projectFiles) {
