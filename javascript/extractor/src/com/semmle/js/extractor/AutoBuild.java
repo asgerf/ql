@@ -867,9 +867,12 @@ protected DependencyInstallationResult preparePackagesAndDependencies(Set<Path> 
         });
 
     // Write the new package.json files to disk
+    List<Path> virtualPackageJsons = new ArrayList<Path>();
     for (Path file : packageJsonFiles.keySet()) {
-      Path virtualFile = virtualSourceRoot.toVirtualFile(file);
 
+      Path relativePath = sourceRoot.relativize(file);
+      Path virtualFile = virtualSourceRoot.toVirtualFile(file);
+      virtualPackageJsons.add(virtualFile);
       try {
         Files.createDirectories(virtualFile.getParent());
         try (Writer writer = Files.newBufferedWriter(virtualFile)) {
@@ -880,33 +883,21 @@ protected DependencyInstallationResult preparePackagesAndDependencies(Set<Path> 
       }
     }
 
-    // Install dependencies
-    if (this.installDependencies && verifyYarnInstallation()) {
-      for (Path file : packageJsonFiles.keySet()) {
-        Path virtualFile = virtualSourceRoot.toVirtualFile(file);
-        System.out.println("Installing dependencies from " + virtualFile);
-        ProcessBuilder pb =
-            new ProcessBuilder(
-                Arrays.asList(
-                    "yarn",
-                    "install",
-                    "--non-interactive",
-                    "--ignore-scripts",
-                    "--ignore-platform",
-                    "--ignore-engines",
-                    "--ignore-optional",
-                    "--no-default-rc",
-                    "--no-bin-links",
-                    "--pure-lockfile"));
-        pb.directory(virtualFile.getParent().toFile());
-        pb.redirectOutput(Redirect.INHERIT);
-        pb.redirectError(Redirect.INHERIT);
-        try {
-          pb.start().waitFor(this.installDependenciesTimeout, TimeUnit.MILLISECONDS);
-        } catch (IOException | InterruptedException ex) {
-          throw new ResourceError("Could not install dependencies from " + file, ex);
-        }
-      }
+    // Pass the list of virtual package.json files to `dependency_installer.js`
+    List<String> command = NodeInterop.getNodeJsRuntimeInvocation(
+        NodeInterop.getBundledScriptFolder().toPath().resolve("dependency_installer.js").toString()
+    );
+    for (Path packageJson : virtualPackageJsons) {
+      command.add(packageJson.toString());
+    }
+    ProcessBuilder pb = new ProcessBuilder(command);
+    pb.directory(virtualSourceRoot.getVirtualSourceRoot().toFile());
+    pb.redirectOutput(Redirect.INHERIT);
+    pb.redirectError(Redirect.INHERIT);
+    try {
+      pb.start().waitFor(this.installDependenciesTimeout, TimeUnit.MILLISECONDS);
+    } catch (IOException | InterruptedException ex) {
+      throw new ResourceError("Could not install dependencies", ex);
     }
 
     return new DependencyInstallationResult(packageMainFile, packagesInRepo);
