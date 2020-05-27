@@ -23,6 +23,9 @@ import ch.qos.logback.classic.Level;
 
 /**
  * Methods for interacting with a Node.js process.
+ *
+ * Note that most environment variables are named "TYPESCRIPT" for legacy reasons and remain
+ * this way for backwards compatibility.
  */
 public class NodeInterop {
   /**
@@ -60,6 +63,15 @@ public class NodeInterop {
    * #verifyNodeInstallation}.
    */
   private static List<String> nodeJsRuntimeExtraArgs = Collections.emptyList();
+
+  /**
+   * Returns the folder containing our bundled Node.js scripts. 
+   */
+  public static File getBundledScriptFolder() {
+    // This folder is called typescript-parser-wrapper for legacy reasons, but we use
+    // it more generally now.
+    return new File(EnvironmentVariables.getExtractorRoot(), "tools/typescript-parser-wrapper");
+  }
 
   /**
    * Verifies that Node.js is installed and throws an exception otherwise.

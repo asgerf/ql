@@ -28,7 +28,6 @@ import com.google.gson.JsonParseException;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonPrimitive;
 import com.semmle.js.extractor.DependencyInstallationResult;
-import com.semmle.js.extractor.EnvironmentVariables;
 import com.semmle.js.extractor.ExtractionMetrics;
 import com.semmle.js.extractor.VirtualSourceRoot;
 import com.semmle.js.nodeinterop.NodeInterop;
@@ -204,9 +203,7 @@ public class TypeScriptParser {
     if (explicitPath != null) {
       parserWrapper = new File(explicitPath);
     } else {
-      parserWrapper =
-          new File(
-              EnvironmentVariables.getExtractorRoot(), "tools/typescript-parser-wrapper/main.js");
+      parserWrapper = new File(NodeInterop.getBundledScriptFolder(), "main.js");
     }
     if (!parserWrapper.isFile())
       throw new ResourceError(
