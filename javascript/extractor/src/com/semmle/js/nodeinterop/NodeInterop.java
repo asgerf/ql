@@ -1,6 +1,5 @@
 package com.semmle.js.nodeinterop;
 
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -15,12 +14,7 @@ import com.semmle.util.exception.Exceptions;
 import com.semmle.util.exception.InterruptedError;
 import com.semmle.util.exception.ResourceError;
 import com.semmle.util.exception.UserError;
-import com.semmle.util.logging.LogbackUtils;
-import com.semmle.util.process.AbstractProcessBuilder;
-import com.semmle.util.process.Builder;
 import com.semmle.util.process.Env;
-
-import ch.qos.logback.classic.Level;
 
 /**
  * Methods for interacting with a Node.js process.
@@ -167,27 +161,16 @@ public class NodeInterop {
    * Checks that Node.js is installed and can be run and returns its version string.
    */
   private static String startNodeAndGetVersion() throws InterruptedError {
-    LogbackUtils.getLogger(AbstractProcessBuilder.class).setLevel(Level.INFO);
-    ByteArrayOutputStream out = new ByteArrayOutputStream();
-    ByteArrayOutputStream err = new ByteArrayOutputStream();
-    Builder b =
-        new Builder(
-            getNodeJsRuntimeInvocation("--version"), out, err, new File(EnvironmentVariables.getExtractorRoot()));
-    b.expectFailure(); // We want to do our own logging in case of an error.
-
+    FireAndForgetProcess process = new FireAndForgetProcess(getNodeJsRuntimeInvocation("--version"));
+    
     try {
-      int r = b.execute(getTimeout());
-      String stdout = new String(out.toByteArray());
-      String stderr = new String(err.toByteArray());
-      if (r != 0 || stdout.length() == 0) {
-        throw new CatastrophicError(
-            "Could not start Node.js. It is required for TypeScript extraction.\n" + stderr);
-      }
-      return nodeJsVersionString = stdout;
-    } catch (ResourceError e) {
-      // In case 'node' is not found, the process builder converts the IOException
-      // into a ResourceError.
-      Exceptions.ignore(e, "We rewrite this into a UserError");
+      return process.execute();
+    } catch (ProcessFailedError err) {
+      // If 'node' was found but failed somehow, treat as a catastrophic error.
+      throw new CatastrophicError(
+          "Could not start Node.js. It is required for TypeScript extraction.", err);
+    } catch (ResourceError err) {
+      // If 'node' could not be found, convert this to a UserError.
       throw new UserError(
           "Could not start Node.js. It is required for TypeScript extraction."
               + "\nPlease install Node.js and ensure 'node' is on the PATH.");
