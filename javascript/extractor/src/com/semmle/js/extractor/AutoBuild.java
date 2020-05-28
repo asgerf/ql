@@ -43,6 +43,7 @@ import com.semmle.js.extractor.FileExtractor.FileType;
 import com.semmle.js.extractor.trapcache.DefaultTrapCache;
 import com.semmle.js.extractor.trapcache.DummyTrapCache;
 import com.semmle.js.extractor.trapcache.ITrapCache;
+import com.semmle.js.nodeinterop.FireAndForgetProcess;
 import com.semmle.js.nodeinterop.NodeInterop;
 import com.semmle.js.parser.ParsedProject;
 import com.semmle.ts.extractor.TypeExtractor;
@@ -51,6 +52,7 @@ import com.semmle.ts.extractor.TypeTable;
 import com.semmle.util.data.StringUtil;
 import com.semmle.util.exception.CatastrophicError;
 import com.semmle.util.exception.Exceptions;
+import com.semmle.util.exception.InterruptedError;
 import com.semmle.util.exception.ResourceError;
 import com.semmle.util.exception.UserError;
 import com.semmle.util.extraction.ExtractorOutputConfig;
@@ -688,6 +690,42 @@ public class AutoBuild {
     return false;
   }
 
+  /** Returns true if NPM is installed, otherwise prints a warning and returns false. */
+  private boolean verifyNpmInstallation() {
+    try {
+      String stdout = FireAndForgetProcess.executeWithRetry("NPM", Arrays.asList("npm", "--version"));
+      System.out.println("Found NPM version " + stdout);
+      return true;
+    } catch (ResourceError | InterruptedError err) {
+      System.err.println(err.getMessage());
+      System.out.println("NPM could not be started. Skipping dependency installation.");
+      return false;
+    }
+  }
+
+  /** Gets the location of the NPM package or <tt>null</tt> if not found. */
+  private String getNpmPath() {
+    String stdout;
+    try {
+      // `npm ls -g npm` gets the location of the NPM package itself.
+      // Add `--parseable` to get just the path, without any pretty formatting.
+      stdout = FireAndForgetProcess.executeWithRetry("NPM", Arrays.asList("npm", "--parseable", "ls", "-g", "npm"));
+    } catch (ResourceError | InterruptedError err) {
+      System.out.println("NPM package not found. Skipping dependency installation.");
+      return null;
+    }
+
+    if (stdout.isEmpty()) {
+      System.out.println("NPM package not found. Skipping dependency installation.");
+      return null;
+    }
+
+    // In case of multiple lines, only get the first line.
+    String path = StringUtil.lines(stdout)[0];
+    System.out.println("Found NPM path at " + path);
+    return path;
+  }
+
   /**
    * Returns an existing file named <code>dir/stem.ext</code> where <code>.ext</code> is any
    * of the given extensions, or <code>null</code> if no such file exists.
@@ -756,8 +794,17 @@ public class AutoBuild {
    * The TypeScript parser wrapper then overrides module resolution so packages can be found
    * under the virtual source root and via that package location mapping.
    */
-protected DependencyInstallationResult preparePackagesAndDependencies(Set<Path> filesToExtract) {
+  protected DependencyInstallationResult preparePackagesAndDependencies(Set<Path> filesToExtract) {
     final Path sourceRoot = LGTM_SRC;
+
+    if (!verifyNpmInstallation()) {
+      return DependencyInstallationResult.empty;
+    }
+
+    String npmPath = getNpmPath();
+    if (npmPath == null) {
+      return DependencyInstallationResult.empty;
+    }
 
     // Read all package.json files and index them by name.
     Map<Path, JsonObject> packageJsonFiles = new LinkedHashMap<>();
@@ -870,6 +917,9 @@ protected DependencyInstallationResult preparePackagesAndDependencies(Set<Path> 
     pb.directory(virtualSourceRoot.getVirtualSourceRoot().toFile());
     pb.redirectOutput(Redirect.INHERIT);
     pb.redirectError(Redirect.INHERIT);
+
+    // dependency_installer.js depends on packages in NPM
+    pb.environment().put("NODE_PATH", getNodeModuleFoldersVisibleAt(Paths.get(npmPath)));
     try {
       pb.start().waitFor(this.installDependenciesTimeout, TimeUnit.MILLISECONDS);
     } catch (IOException | InterruptedException ex) {
@@ -877,6 +927,23 @@ protected DependencyInstallationResult preparePackagesAndDependencies(Set<Path> 
     }
 
     return new DependencyInstallationResult(packageMainFile, packagesInRepo);
+  }
+
+  /**
+   * Returns the value of <code>NODE_PATH</code> containing all <code>node_modules</code>
+   * folders visible to a script running in the given directory.
+   */
+  String getNodeModuleFoldersVisibleAt(Path npmPath) {
+    Path path = npmPath;
+    List<Path> paths = new ArrayList<Path>();
+    while (path != null && path.getParent() != null) {
+      Path nodeModules = path.resolve("node_modules");
+      if (Files.exists(nodeModules)) {
+        paths.add(nodeModules);
+      }
+      path = path.getParent();
+    }
+    return StringUtil.glue(File.pathSeparator, paths);
   }
 
   /**

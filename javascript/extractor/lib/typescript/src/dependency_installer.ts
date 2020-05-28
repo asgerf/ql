@@ -6,6 +6,12 @@
  *
  * This means only installing packages containing such files, and not running scripts
  * or checking engine/platform requirements etc.
+ *
+ * Note that this script depends on the NPM package being on the NODE_PATH.
+ * To test it outside the extractor:
+ * ```
+ * env NODE_PATH=$(dirname $(npm --parseable ls -g npm)) node dependency_installer.js
+ * ```
  */
 
 import * as fs from "fs";
