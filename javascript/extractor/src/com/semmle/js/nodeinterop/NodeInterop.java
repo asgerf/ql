@@ -112,8 +112,19 @@ public class NodeInterop {
   public static String verifyNodeInstallation() {
     if (nodeJsVersionString != null) return nodeJsVersionString;
 
-    // Run 'node --version' with a timeout, and retry a few times if it times out.
-    return withRetries(NodeInterop::startNodeAndGetVersion, "Node.js");
+    try {
+      nodeJsVersionString = FireAndForgetProcess.executeWithRetry("Node.js", getNodeJsRuntimeInvocation("--version"));
+      return nodeJsVersionString;
+    } catch (ProcessFailedError err) {
+      // If 'node' was found but failed somehow, treat as a catastrophic error.
+      throw new CatastrophicError(
+          "Could not start Node.js. It is required for TypeScript extraction.", err);
+    } catch (ResourceError err) {
+      // If 'node' could not be found, convert this to a UserError.
+      throw new UserError(
+          "Could not start Node.js. It is required for TypeScript extraction."
+              + "\nPlease install Node.js and ensure 'node' is on the PATH.");
+    }
   }
 
   /**
@@ -137,8 +148,10 @@ public class NodeInterop {
    * support long suspensions in cloud environments. Instead of setting a huge timeout,
    * retrying guarantees we can survive arbitrary suspensions as long as they don't happen
    * too many times in rapid succession.
+   *
+   * @throws InterruptedError if the final retry attempt timed out
    */
-  public static <T> T withRetries(Supplier<T> callback, String name) {
+  public static <T> T withRetries(Supplier<T> callback, String name) throws InterruptedError {
     int numRetries = getNumberOfRetries();
     for (int i = 0; i < numRetries - 1; ++i) {
       try {
@@ -152,28 +165,8 @@ public class NodeInterop {
       return callback.get();
     } catch (InterruptedError e) {
       Exceptions.ignore(e, "Exception details are not important.");
-      throw new CatastrophicError(
+      throw new InterruptedError(
           "Could not start " + name + " (timed out after " + (getTimeout() / 1000) + "s and " + numRetries + " attempts");
-    }
-  }
-
-  /**
-   * Checks that Node.js is installed and can be run and returns its version string.
-   */
-  private static String startNodeAndGetVersion() throws InterruptedError {
-    FireAndForgetProcess process = new FireAndForgetProcess(getNodeJsRuntimeInvocation("--version"));
-    
-    try {
-      return process.execute();
-    } catch (ProcessFailedError err) {
-      // If 'node' was found but failed somehow, treat as a catastrophic error.
-      throw new CatastrophicError(
-          "Could not start Node.js. It is required for TypeScript extraction.", err);
-    } catch (ResourceError err) {
-      // If 'node' could not be found, convert this to a UserError.
-      throw new UserError(
-          "Could not start Node.js. It is required for TypeScript extraction."
-              + "\nPlease install Node.js and ensure 'node' is on the PATH.");
     }
   }
 

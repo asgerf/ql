@@ -49,7 +49,7 @@ public class FireAndForgetProcess {
    *
    * @return the value of stdout
    * @throws ResourceError if the process could not be started
-   * @throws ProcessFailedError if the exit code was non-zero
+   * @throws ProcessFailedError if the exit code was non-zero (this is a subtype of ResourceError)
    * @throws InterruptedError if the process timed out (10s by default)
    */
   public String execute() throws ResourceError, ProcessFailedError, InterruptedError {
@@ -59,5 +59,33 @@ public class FireAndForgetProcess {
       throw new ProcessFailedError(getStderr());
     }
     return getStdout();
+  }
+
+  /**
+   * Executes the process and returns the value of stdout if it succeeded.
+   *
+   * @param command command to execute
+   * @return the value of stdout
+   * @throws ResourceError if the process could not be started
+   * @throws ProcessFailedError if the exit code was non-zero (this is a subtype of ResourceError)
+   * @throws InterruptedError if the process timed out (10s by default)
+   */
+  public static String execute(List<String> command) throws ResourceError, ProcessFailedError, InterruptedError {
+    return new FireAndForgetProcess(command).execute();
+  }
+
+  /**
+   * Executes the process and returns the value of stdout if it succeeded.
+   * The command will be retried if it times out.
+   *
+   * @param a human-readable name for the process to use in error messages
+   * @param command command to execute
+   * @return the value of stdout
+   * @throws ResourceError if the process could not be started
+   * @throws ProcessFailedError if the exit code was non-zero (this is a subtype of ResourceError)
+   * @throws InterruptedError if final attempt timed out (10s by default)
+   */
+  public static String executeWithRetry(String name, List<String> command) throws ResourceError, ProcessFailedError, InterruptedError {
+    return NodeInterop.withRetries(() -> execute(command), name);
   }
 }
