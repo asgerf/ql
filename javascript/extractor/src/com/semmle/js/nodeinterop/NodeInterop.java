@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.function.Supplier;
 
 import com.semmle.js.extractor.EnvironmentVariables;
 import com.semmle.ts.extractor.TypeScriptParser;
@@ -122,29 +123,49 @@ public class NodeInterop {
     // support long suspensions in cloud environments. Instead of setting a huge timeout,
     // retrying guarantees we can survive arbitrary suspensions as long as they don't happen
     // too many times in rapid succession.
-    int timeout = Env.systemEnv().getInt(TYPESCRIPT_TIMEOUT_VAR, 10000);
-    int numRetries = Env.systemEnv().getInt(TYPESCRIPT_RETRIES_VAR, 3);
+    return withRetries(NodeInterop::startNodeAndGetVersion, "Node.js");
+  }
+
+  /**
+   * Returns the timeout in milliseconds when probing a Node installation.
+   */
+  public static long getTimeout() {
+    return Env.systemEnv().getInt(TYPESCRIPT_TIMEOUT_VAR, 10000);
+  }
+
+  /**
+   * Returns the number of times to retry a command when probing a Node installation.
+   */
+  public static int getNumberOfRetries() {
+    return Env.systemEnv().getInt(TYPESCRIPT_RETRIES_VAR, 3);
+  }
+
+  /**
+   * Executes the given callback and retries it if it times out.
+   */
+  public static <T> T withRetries(Supplier<T> callback, String name) {
+    int numRetries = getNumberOfRetries();
     for (int i = 0; i < numRetries - 1; ++i) {
       try {
-        return startNodeAndGetVersion(timeout);
+        return callback.get();
       } catch (InterruptedError e) {
         Exceptions.ignore(e, "We will retry the call that caused this exception.");
-        System.err.println("Starting Node.js seems to take a long time. Retrying.");
+        System.err.println("Starting " + name + " seems to take a long time. Retrying.");
       }
     }
     try {
-      return startNodeAndGetVersion(timeout);
+      return callback.get();
     } catch (InterruptedError e) {
       Exceptions.ignore(e, "Exception details are not important.");
       throw new CatastrophicError(
-          "Could not start Node.js (timed out after " + (timeout / 1000) + "s and " + numRetries + " attempts");
+          "Could not start " + name + " (timed out after " + (getTimeout() / 1000) + "s and " + numRetries + " attempts");
     }
   }
 
   /**
    * Checks that Node.js is installed and can be run and returns its version string.
    */
-  private static String startNodeAndGetVersion(int timeout) throws InterruptedError {
+  private static String startNodeAndGetVersion() throws InterruptedError {
     LogbackUtils.getLogger(AbstractProcessBuilder.class).setLevel(Level.INFO);
     ByteArrayOutputStream out = new ByteArrayOutputStream();
     ByteArrayOutputStream err = new ByteArrayOutputStream();
@@ -154,7 +175,7 @@ public class NodeInterop {
     b.expectFailure(); // We want to do our own logging in case of an error.
 
     try {
-      int r = b.execute(timeout);
+      int r = b.execute(getTimeout());
       String stdout = new String(out.toByteArray());
       String stderr = new String(err.toByteArray());
       if (r != 0 || stdout.length() == 0) {
