@@ -52,17 +52,17 @@ public class NodeInterop {
    * the TypeScript installation. Default is 3.
    */
   public static final String TYPESCRIPT_RETRIES_VAR = "SEMMLE_TYPESCRIPT_RETRIES";
-  
+
   private static String nodeJsVersionString;
 
   /**
    * Arguments to pass to the Node.js runtime each time it is invoked. Initialised by {@link
-   * #verifyNodeInstallation}.
+   * #getNodeJsRuntimeExtraArgs}.
    */
-  private static List<String> nodeJsRuntimeExtraArgs = Collections.emptyList();
+  private static List<String> _nodeJsRuntimeExtraArgs;
 
   /**
-   * Returns the folder containing our bundled Node.js scripts. 
+   * Returns the folder containing our bundled Node.js scripts.
    */
   public static File getBundledScriptFolder() {
     // This folder is called typescript-parser-wrapper for legacy reasons, but we use
@@ -82,6 +82,19 @@ public class NodeInterop {
     }
   }
 
+  /** Gets any extra arguments to use when invoking `node`. */
+  private static List<String> getNodeJsRuntimeExtraArgs() {
+    if (_nodeJsRuntimeExtraArgs != null) return _nodeJsRuntimeExtraArgs;
+    // Determine any additional arguments to be passed to Node.js each time it's called.
+    String extraArgs = Env.systemEnv().get(TYPESCRIPT_NODE_RUNTIME_EXTRA_ARGS_VAR);
+    if (extraArgs != null) {
+      _nodeJsRuntimeExtraArgs = Arrays.asList(extraArgs.split("\\s+"));
+    } else {
+      _nodeJsRuntimeExtraArgs = Collections.emptyList();
+    }
+    return _nodeJsRuntimeExtraArgs;
+  }
+
   /**
    * Verifies that Node.js is installed and throws an exception otherwise.
    *
@@ -93,6 +106,7 @@ public class NodeInterop {
     if (verbose) {
       System.out.println("Found Node.js at: " + getNodeJsRuntime());
       System.out.println("Found Node.js version: " + nodeJsVersionString);
+      List<String> nodeJsRuntimeExtraArgs = getNodeJsRuntimeExtraArgs();
       if (!nodeJsRuntimeExtraArgs.isEmpty()) {
         System.out.println("Additional arguments for Node.js: " + nodeJsRuntimeExtraArgs);
       }
@@ -102,12 +116,6 @@ public class NodeInterop {
   /** Checks that Node.js is installed and can be run and returns its version string. */
   public static String verifyNodeInstallation() {
     if (nodeJsVersionString != null) return nodeJsVersionString;
-
-    // Determine any additional arguments to be passed to Node.js each time it's called.
-    String extraArgs = Env.systemEnv().get(TYPESCRIPT_NODE_RUNTIME_EXTRA_ARGS_VAR);
-    if (extraArgs != null) {
-      nodeJsRuntimeExtraArgs = Arrays.asList(extraArgs.split("\\s+"));
-    }
 
     // Run 'node --version' with a timeout, and retry a few times if it times out.
     // If the Java process is suspended we may get a spurious timeout, and we want to
@@ -171,7 +179,7 @@ public class NodeInterop {
   public static List<String> getNodeJsRuntimeInvocation(String... args) {
     List<String> result = new ArrayList<>();
     result.add(getNodeJsRuntime());
-    result.addAll(nodeJsRuntimeExtraArgs);
+    result.addAll(getNodeJsRuntimeExtraArgs());
     for (String arg : args) {
       result.add(arg);
     }
