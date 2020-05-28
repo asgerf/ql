@@ -119,10 +119,6 @@ public class NodeInterop {
     if (nodeJsVersionString != null) return nodeJsVersionString;
 
     // Run 'node --version' with a timeout, and retry a few times if it times out.
-    // If the Java process is suspended we may get a spurious timeout, and we want to
-    // support long suspensions in cloud environments. Instead of setting a huge timeout,
-    // retrying guarantees we can survive arbitrary suspensions as long as they don't happen
-    // too many times in rapid succession.
     return withRetries(NodeInterop::startNodeAndGetVersion, "Node.js");
   }
 
@@ -142,6 +138,11 @@ public class NodeInterop {
 
   /**
    * Executes the given callback and retries it if it times out.
+   * <p>
+   * If the Java process is suspended we may get a spurious timeout, and we want to
+   * support long suspensions in cloud environments. Instead of setting a huge timeout,
+   * retrying guarantees we can survive arbitrary suspensions as long as they don't happen
+   * too many times in rapid succession.
    */
   public static <T> T withRetries(Supplier<T> callback, String name) {
     int numRetries = getNumberOfRetries();
