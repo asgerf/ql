@@ -161,6 +161,26 @@ module Redux {
       DataFlow::Node getMapDispatchToPropsNode() {
         result = getArgument(1)
       }
+
+      /**
+       * Gets the second argument to `connect`, usually known as `mapDispatchToProps`.
+       */
+      DataFlow::FunctionNode getMapDispatchToPropsFunction() {
+        result = getCallback(1)
+      }
+
+      /**
+       * Gets a data-flow node that should flow to `props.name` via the `mapDispatchToProps` function.
+       */
+      DataFlow::Node getDispatchPropNode(string name) {
+        result = getMapDispatchToPropsNode().getALocalSource().getAPropertyWrite(name).getRhs()
+        or
+        exists(DataFlow::CallNode bind |
+          bind = API::moduleImport("redux").getMember("bindActionCreators").getACall() and
+          bind.flowsTo(getMapDispatchToPropsFunction().getReturnNode()) and
+          result = bind.getOptionArgument(0, name)
+        )
+      }
   
       /**
        * Gets the React component decorated by this call, if one can be determined.
@@ -188,9 +208,14 @@ module Redux {
      * was passed in through `mapDispatchToProps`:
      */
     private class ReduxToolkitDispatch extends ReduxToolkitAction {
+      DataFlow::Node test() {
+        this = API::moduleImport("redux-actions").getMember("createActions").getReturn().getMember("setDocsVisible") and
+        result = getAUse()
+      }
+
       override DataFlow::Node getAnAdditionalInput() {
         exists(ConnectCall call, string name |
-          call.getMapDispatchToPropsNode().getALocalSource().getAPropertySource(name) = getAUse() and
+          call.getDispatchPropNode(name) = getAUse() and
           result = call.getReactComponent().getAPropRead(name).getACall().getArgument(0)
         )
       }
