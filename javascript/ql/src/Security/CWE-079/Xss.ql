@@ -21,7 +21,9 @@ where
     cfg instanceof HtmlInjectionConfiguration or
     cfg instanceof JQueryHtmlOrSelectorInjectionConfiguration
   ) and
-  cfg.hasFlowPath(source, sink)
+  cfg.hasFlowPath(source, sink) and
+  not sink.getNode() = any(ExprStmt stmt).getExpr().flow() and
+  not sink.getNode() = any(MethodCallExpr m).getCallee().flow()
 select sink.getNode(), source, sink,
-  sink.getNode().(Sink).getVulnerabilityKind() + " vulnerability due to $@.", source.getNode(),
+  " vulnerability due to $@.", source.getNode(),
   "user-provided value"
