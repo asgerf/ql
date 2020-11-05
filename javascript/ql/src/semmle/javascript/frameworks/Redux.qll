@@ -14,28 +14,40 @@ import javascript
 // The third kind of step is technically independent of the core Redux library, but
 // this file includes modeling of such adapter libraries as well.
 module Redux {
+  private class ReduxRootStateTag extends DataFlow::CustomNodes::SingletonNodeTag {
+    ReduxRootStateTag() { this = "redux-root-state" }
+  }
+
+  private class ReduxRootStateNode extends DataFlow::CustomNodes::SingletonNode, DataFlow::SourceNode::Range {
+    override ReduxRootStateTag tag;
+  }
+
+  private ReduxRootStateNode rootState() { any() }
+
   //
   // DISPATCH TO REDUCER
   //
 
   /**
-   * A value which, when invoked as a function, creates an action instance to be dispatched.
+   * A value which, when invoked as a function, creates and/or dispatches an action to the Redux store.
    *
-   * The Redux model establishes flow between calls to an action builder and the corresponding
+   * The Redux model establishes data flow between calls to a dispatcher and the corresponding
    * action payload in the reducer function.
    */
-  class ActionBuilder extends DataFlow::SourceNode {
-    ActionBuilder::Range range;
+  class Dispatcher extends DataFlow::SourceNode {
+    Dispatcher::Range range;
 
-    ActionBuilder() { this = range }
+    Dispatcher() { this = range }
 
     /**
-     * Gets a function which acts as a "middleware" for this action, transforming the arguments to
-     * the action builder before reaching the reducer.
+     * Gets a function which acts as a "middleware" for this dispatcher, transforming its arguments
+     * into the actual action that gets dispatched.
+     *
+     * If no middleware exists, the first argument to the dispatcher is treated as the action itself.
      */
-    DataFlow::FunctionNode getActionMiddlewareFunction() { result = range.getActionMiddlewareFunction() }
+    DataFlow::FunctionNode getMiddlewareFunction() { result = range.getMiddlewareFunction() }
 
-    /** Gets a data flow node referring to this action builder. */
+    /** Gets a data flow node referring to this dispatcher. */
     private DataFlow::SourceNode ref(DataFlow::TypeTracker t) {
       t.start() and
       result = this
@@ -45,20 +57,35 @@ module Redux {
       )
     }
     
-    /** Gets a data flow node referring to this action builder. */
+    /** Gets a data flow node referring to this dispatcher. */
     DataFlow::SourceNode ref() {
       result = ref(DataFlow::TypeTracker::end())
     }
 
-    final DataFlow::CallNode getAnActionInvocation() {
-      result = ref().getACall() // use API graphs
+    /** Gets a call to the dispatcher. */
+    final DataFlow::CallNode getADispatchInvocation() {
+      result = ref().getACall()
       or
-      result = getAnAdditionalInvocation()
+      result = getAnAdditionalDispatchInvocation()
     }
 
-    DataFlow::CallNode getAnAdditionalInvocation() { none() }
+    /**
+     * Gets an additional call to the dispatcher, contributed by a subclass.
+     *
+     * This is a hook for modeling "framework bridges" like `react-redux`, where steps specific to one
+     * UI framework can affect the flow of Redux dispatchers.
+     */
+    DataFlow::CallNode getAnAdditionalDispatchInvocation() { none() }
 
-    string getTypeTag() { result = range.getTypeTag() }
+    /**
+     * Gets the value of `propName` on the dispatched action object, which acts as a "type tag" for this action,
+     * distinguishing it from other types of actions.
+     *
+     * For example, for a call `dispatch({type: "foo", data})` we would have `getTypeTag("type") = "foo"`.
+     *
+     * Typically `propName` is `"type"`.
+     */
+    string getTypeTag(string propName) { result = range.getTypeTag(propName) }
 
     /** Gets a data flow node referring a payload of this action (usually in the reducer function). */
     DataFlow::SourceNode getAPayloadReference() {
@@ -70,59 +97,63 @@ module Redux {
         guard.dominates(result.getBasicBlock())
       )
       or
-      result = API::moduleImport("redux-actions").getMember("handleActions").getParameter(0).getMember(getTypeTag()).getParameter(1).getAUse()
+      result = API::moduleImport("redux-actions").getMember("handleActions").getParameter(0).getMember(getTypeTag("type")).getParameter(1).getAUse()
     }
   }
 
-  module ActionBuilder {
+  module Dispatcher {
     abstract class Range extends DataFlow::SourceNode {
-      DataFlow::FunctionNode getActionMiddlewareFunction() { none() }
-      string getTypeTag() { none() }
+      DataFlow::FunctionNode getMiddlewareFunction() { none() }
+      string getTypeTag(string propName) { none() }
     }
 
-    class SingleActionBuilder extends Range, DataFlow::CallNode {
-      SingleActionBuilder() {
+    /** A dispatcher created by `createAction` from either `@reduxjs/toolkit` or `redux-actions`. */
+    class SingleAction extends Range, DataFlow::CallNode {
+      SingleAction() {
         this = API::moduleImport(["@reduxjs/toolkit", "redux-actions"]).getMember("createAction").getACall()
       }
 
-      override string getTypeTag() {
+      override string getTypeTag(string propName) {
+        propName = "type" and
         getArgument(0).mayHaveStringValue(result)
       }
     }
 
-    class BulkActionBuilder extends Range {
+    /** One of the dispatchers created by a call to `createActions` from `redux-actions`. */
+    class MultiAction extends Range {
       DataFlow::CallNode createActions;
       string name;
 
-      BulkActionBuilder() {
+      MultiAction() {
         createActions = API::moduleImport("redux-actions").getMember("createActions").getACall() and 
         this = createActions.getAPropertyRead(name)
       }
 
-      override DataFlow::FunctionNode getActionMiddlewareFunction() {
-        result.flowsTo(createActions.getOptionArgument(0, getTypeTag()))
+      override DataFlow::FunctionNode getMiddlewareFunction() {
+        result.flowsTo(createActions.getOptionArgument(0, getTypeTag("type")))
       }
 
-      override string getTypeTag() {
+      override string getTypeTag(string propName) {
+        propName = "type" and
         result = name.regexpReplaceAll("([a-z])([A-Z])", "$1_$2").toUpperCase()
       }
     }
   }
 
   predicate dispatchStep(DataFlow::Node input, DataFlow::SourceNode output) {
-    exists(ActionBuilder action |
-      exists(DataFlow::CallNode call | call = action.getAnActionInvocation() |
+    exists(Dispatcher action |
+      exists(DataFlow::CallNode call | call = action.getADispatchInvocation() |
         exists(int i |
           input = call.getArgument(i) and
-          output = action.getActionMiddlewareFunction().getParameter(i)
+          output = action.getMiddlewareFunction().getParameter(i)
         )
         or
-        not exists(action.getActionMiddlewareFunction()) and
+        not exists(action.getMiddlewareFunction()) and
         input = call.getArgument(0) and
         output = action.getAPayloadReference()
       )
       or
-      input = action.getActionMiddlewareFunction().getReturnNode() and
+      input = action.getMiddlewareFunction().getReturnNode() and
       output = action.getAPayloadReference()
     )
   }
@@ -136,7 +167,6 @@ module Redux {
     }
   }
 
-
   //
   // REDUCER TO STATE ACCESS
   //
@@ -149,32 +179,93 @@ module Redux {
   abstract class RootStateNode extends API::Node {
   }
 
+  API::Node rootReducer() {
+    result = API::moduleImport("redux").getMember("createStore").getParameter(0)
+    or
+    result = API::moduleImport("@reduxjs/toolkit").getMember("configureStore").getParameter(0).getMember("reducer")
+  }
+
+  /**
+   * Gets an API node corresponding to a `state.prop` access.
+   *
+   * Since there can be a huge number of root state references, and a much-smaller number
+   * of accesses for a given property name `prop`.
+   */
+  pragma[noinline]
+  private API::Node rootStateProp(string prop) {
+    result = any(RootStateNode n).getMember(prop)
+  }
+
+  private API::Node combineReducers(API::Node reducer) {
+    exists(DataFlow::CallNode call |
+      call = API::moduleImport(["redux", "redux-immutable"]).getMember("combineReducers") and
+    )
+    reducer = API::moduleImport(["redux", "redux-immutable"]).getMember("combineReducers").getParameter(0)
+  }
+
   /**
    * Holds if the return-value of `reducer` should flow to `state`.
+   *
+   * This holds for reducers built using `combineReducers` where the access path leading to the reducer
+   * corresponds to the access path in the state.
+   *
+   * For example, the callback in the `foo` property `.foo` access on the root state, and the
+   * callback on the `baz` property corresponds to the `.bar.baz` access:
+   * ```js
+   * let reducer = combineReducers({
+   *   foo: (state, payload) => { ... }
+   *   bar: {
+   *     baz: (state, payload) => { ... }
+   *   }
+   * })
+   *
+   * getRootState().foo // sees value from foo reducer
+   * getRootState().bar.baz // sees value from bar.baz reducer
+   * ```
    */
-  predicate reduxReducerState(API::Node reducer, API::Node state) {
-    // Note: There is a deliberate cartesian product in the base case here.
-    // In practice there are very few root reducers (1 for the real entry point, plus a few in tests).
+  predicate isAccessPathReducer(API::Node reducer, API::Node state) {
     (
-      reducer = API::moduleImport(["redux", "redux-immutable"]).getMember("combineReducers").getParameter(0)
-      or
-      reducer = API::moduleImport("redux-actions").getMember("handleActions").getParameter(0).getAMember()
+      rootReducer().refersTo(reducer)
+    )
+    // Note: There is a deliberate cartesian product in the base case here.
+    // In practice there are very few root reducers for apps that use combineReducers (1 for the real entry point, plus a few in tests).
+    (
+      
     ) and
     state instanceof RootStateNode
     or
     exists(API::Node prevReducer, API::Node prevState, string prop |
-      reduxReducerState(prevReducer, prevState) and
+      isAccessPathReducer(prevReducer, prevState) and
       reducer = prevReducer.getMember(prop) and
       state = prevState.getMember(prop)
     )
   }
 
+  /**
+   * Holds if `reducer` is a function transforming the root state (but possibly only for a subset of actions).
+   */
+  predicate isRootStateReducer(API::Node reducer) {
+    reducer = API::moduleImport("redux-actions").getMember("handleActions").getParameter(0).getAMember()
+  }
+
   predicate reducerStep(DataFlow::Node pred, DataFlow::Node succ) {
     exists(API::Node reducer, API::Node state |
-      reduxReducerState(reducer, state) and
+      isAccessPathReducer(reducer, state) and
       pred = reducer.getReturn().getARhs() and
       succ = state.getAUse()
     )
+    or
+    // Apps that don't use `combineReducer` tend to have a large number of both reducers and state accesses,
+    // potentially leading to a bad N^2 edge blow-up. To avoid that, we use the synthetic redux-root-state node
+    // as a junction between these, so all reducers flow to the root state, and the root state flows to all its uses.
+    exists(API::Node reducer |
+      isRootStateReducer(reducer) and
+      pred = reducer.getReturn().getARhs() and
+      succ = rootState()
+    )
+    or
+    pred = rootState() and
+    succ = any(RootStateNode n).getAUse()
   }
 
   private class ReducerStep extends DataFlow::AdditionalFlowStep {
@@ -281,8 +372,8 @@ module Redux {
      * Treats call to `this.props.foo(x)` as a dispatch of the `foo` action, if the `foo` action
      * was passed in through `mapDispatchToProps`:
      */
-    private class ReduxToolkitDispatch extends ActionBuilder {
-      override DataFlow::CallNode getAnAdditionalInvocation() {
+    private class ReduxToolkitDispatch extends Dispatcher {
+      override DataFlow::CallNode getAnAdditionalDispatchInvocation() {
         exists(ConnectCall call, string name |
           ref().flowsTo(call.getDispatchPropNode(name)) and
           result = call.getReactComponent().getAPropRead(name).getACall()

@@ -1321,7 +1321,8 @@ module DataFlow {
      * A custom data-flow node associated with a `LocatableNodeTag` and a program element.
      * See `LocatableNodeTag` for usage instructions.
      *
-     * Subclasses should consider overriding `getControlFlowNode`, `getBasicBlock`, and `getContainer` where it makes sense.
+     * Subclasses should consider overriding `getControlFlowNode`, `getBasicBlock`, and `getContainer` where it makes sense,
+     * as well as `toString` if the node is likely to show up on a path in a path-problem.
      */
     class LocatableNode extends DataFlow::Node, TCustomLocatableNode {
       LocatableNodeTag tag;

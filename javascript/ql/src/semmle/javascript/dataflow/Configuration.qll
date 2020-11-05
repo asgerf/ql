@@ -1680,6 +1680,9 @@ class MidPathNode extends PathNode, MkMidNode {
     or
     // Skip captured variable nodes as the successor will be a use of that variable anyway.
     nd = DataFlow::capturedVariableNode(_)
+    or
+    // Skip custom singleton nodes, as they have no location
+    nd instanceof DataFlow::CustomNodes::SingletonNode
   }
 }
 
