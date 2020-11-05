@@ -1232,6 +1232,113 @@ module DataFlow {
   }
 
   /**
+   * Provides classes for generating customized data-flow nodes.
+   *
+   * For performance reasons, custom nodes should only be created in shared library code,
+   * not in query-specific code.
+   *
+   * There are two ways to create custom nodes:
+   *  - To create a family of nodes associated with a various program elements,
+   *    see `CustomNodes::LocatableNodeTag`.
+   *  - To create a _singleton node_, that is, a single node without any associated program element,
+   *    see `CustomNodes::SingletonNodeTag`.
+   */
+  module CustomNodes {
+    /**
+     * A string value that induces a corresponding data-flow node, without any associated program element.
+     *
+     * Subclassing this class ensures that a `SingletonNode` with this tag will be created.
+     *
+     * To create a new singleton node, subclass this class as well as `SingletonNode` as follows:
+     * ```codeql
+     * // Class to ensure the new kind of node will be created
+     * private class MyNodeTag extends DataFlow::CustomNodes::SingletonNodeTag {
+     *   MyNodeTag() { this = "my-node" }
+     * }
+     *
+     * // Class for interacting with the new data-flow node
+     * class MyNode extends DataFlow::CustomNodes::SingletonNode {
+     *   override MyNodeTag tag;
+     * }
+     * ```
+     */
+    abstract class SingletonNodeTag extends string {
+      bindingset[this]
+      SingletonNodeTag() { any() }
+    }
+
+    /**
+     * A custom data-flow node with an associated `SingletonNodeTag`.
+     * See `SingletonNodeTag` for usage instructions.
+     */
+    class SingletonNode extends DataFlow::Node, TCustomSingletonNode {
+      SingletonNodeTag tag;
+
+      SingletonNode() { this = TCustomSingletonNode(tag) }
+
+      override string toString() {
+        result = "singleton-node(" + tag + ")"
+      }
+    }
+
+    /**
+     * A string value that induces a corresponding data-flow node for each program element in a given set.
+     *
+     * Subclassing this class ensures that a `LocatableNode` with this tag and each value of `getAProgramElement()` will be created.
+     *
+     * To create a new locatable node, subclass this class as well as `LocatableNode` as follows:
+     * ```codeql
+     * // Class to ensure the new kind of node will be created
+     * private class MyNodeTag extends DataFlow::CustomNodes::LocatableNodeTag {
+     *   MyNodeTag() { this = "my-node" }
+     *
+     *   override Locatable getALocatable() { result = <associated program elements> }
+     * }
+     *
+     * // Class for interacting with the new data-flow node
+     * class MyNode extends DataFlow::CustomNodes::LocatableNode {
+     *   override MyNodeTag tag;
+     *   override MyProgramElement locatable; // optional: restricts the type of the associated program element
+     * }
+     * ```
+     */
+    abstract class LocatableNodeTag extends string {
+      bindingset[this]
+      LocatableNodeTag() { any() }
+
+      /**
+       * Gets a program element for which a data-flow node with this tag should be generated.
+       */
+      abstract Locatable getALocatable();
+    }
+
+    /**
+     * A custom data-flow node associated with a `LocatableNodeTag` and a program element.
+     * See `LocatableNodeTag` for usage instructions.
+     *
+     * Subclasses should consider overriding `getControlFlowNode`, `getBasicBlock`, and `getContainer` where it makes sense.
+     */
+    class LocatableNode extends DataFlow::Node, TCustomLocatableNode {
+      LocatableNodeTag tag;
+      Locatable locatable;
+
+      LocatableNode() { this = TCustomLocatableNode(tag, locatable) }
+
+      override predicate hasLocationInfo(
+        string filepath, int startline, int startcolumn, int endline, int endcolumn
+      ) {
+        locatable
+            .getLocation()
+            .hasLocationInfo(filepath, startline, startcolumn, endline, endcolumn)
+      }
+
+      override string toString() {
+        result = "locatable-node(" + tag + ")"
+      }
+    }
+  }
+
+  /**
    * INTERNAL. DO NOT USE.
    *
    * Gets a data flow node representing the given captured variable.

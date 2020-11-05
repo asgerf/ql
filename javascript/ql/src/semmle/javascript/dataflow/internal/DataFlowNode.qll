@@ -30,4 +30,8 @@ newtype TNode =
   TFunctionReturnNode(Function f) or
   TExceptionalFunctionReturnNode(Function f) or
   TExceptionalInvocationReturnNode(InvokeExpr e) or
-  TGlobalAccessPathRoot()
+  TGlobalAccessPathRoot() or
+  TCustomSingletonNode(DataFlow::CustomNodes::SingletonNodeTag tag) or
+  TCustomLocatableNode(DataFlow::CustomNodes::LocatableNodeTag tag, Locatable locatable) {
+    locatable = tag.getALocatable()
+  }
