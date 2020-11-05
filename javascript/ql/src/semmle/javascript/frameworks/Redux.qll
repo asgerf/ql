@@ -19,41 +19,111 @@ module Redux {
   //
 
   /**
-   * An Action object created by `reduxjs/toolkit`.
+   * A value which, when invoked as a function, creates an action instance to be dispatched.
+   *
+   * The Redux model establishes flow between calls to an action builder and the corresponding
+   * action payload in the reducer function.
    */
-  class ReduxToolkitAction extends API::Node {
-    ReduxToolkitAction() {
-      this = API::moduleImport(["@reduxjs/toolkit", "redux-actions"]).getMember("createAction").getReturn()
+  class ActionBuilder extends DataFlow::SourceNode {
+    ActionBuilder::Range range;
+
+    ActionBuilder() { this = range }
+
+    /**
+     * Gets a function which acts as a "middleware" for this action, transforming the arguments to
+     * the action builder before reaching the reducer.
+     */
+    DataFlow::FunctionNode getActionMiddlewareFunction() { result = range.getActionMiddlewareFunction() }
+
+    /** Gets a data flow node referring to this action builder. */
+    private DataFlow::SourceNode ref(DataFlow::TypeTracker t) {
+      t.start() and
+      result = this
       or
-      this = API::moduleImport("redux-actions").getMember("createActions").getReturn().getAMember()
+      exists(DataFlow::TypeTracker t2 |
+        result = ref(t2).track(t2, t)
+      )
+    }
+    
+    /** Gets a data flow node referring to this action builder. */
+    DataFlow::SourceNode ref() {
+      result = ref(DataFlow::TypeTracker::end())
     }
 
-    /** Gets a data flow node holding a payload stored in an instance of this action. */
-    final DataFlow::Node getAnActionInput() {
-      result = getACall().getArgument(0)
+    final DataFlow::CallNode getAnActionInvocation() {
+      result = ref().getACall() // use API graphs
       or
-      result = getAnAdditionalInput()
+      result = getAnAdditionalInvocation()
     }
 
-    /** Gets an additional value that subclasses may contribute to `getAnActionInput`. */
-    DataFlow::Node getAnAdditionalInput() { none() }
+    DataFlow::CallNode getAnAdditionalInvocation() { none() }
 
-    /** Gets a data flow node referring a payload of this action (usually in a reducer function). */
-    final DataFlow::SourceNode getAnActionOutput() {
+    string getTypeTag() { result = range.getTypeTag() }
+
+    /** Gets a data flow node referring a payload of this action (usually in the reducer function). */
+    DataFlow::SourceNode getAPayloadReference() {
       exists(DataFlow::CallNode match, ConditionGuardNode guard |
-        match = getMember("match").getACall() and
+        match = ref().getAMethodCall("match") and
         result = match.getArgument(0).getALocalSource().getAPropertyRead("payload") and
         guard.getTest() = match.asExpr() and
         guard.getOutcome() = true and
         guard.dominates(result.getBasicBlock())
       )
+      or
+      result = API::moduleImport("redux-actions").getMember("handleActions").getParameter(0).getMember(getTypeTag()).getParameter(1).getAUse()
+    }
+  }
+
+  module ActionBuilder {
+    abstract class Range extends DataFlow::SourceNode {
+      DataFlow::FunctionNode getActionMiddlewareFunction() { none() }
+      string getTypeTag() { none() }
+    }
+
+    class SingleActionBuilder extends Range, DataFlow::CallNode {
+      SingleActionBuilder() {
+        this = API::moduleImport(["@reduxjs/toolkit", "redux-actions"]).getMember("createAction").getACall()
+      }
+
+      override string getTypeTag() {
+        getArgument(0).mayHaveStringValue(result)
+      }
+    }
+
+    class BulkActionBuilder extends Range {
+      DataFlow::CallNode createActions;
+      string name;
+
+      BulkActionBuilder() {
+        createActions = API::moduleImport("redux-actions").getMember("createActions").getACall() and 
+        this = createActions.getAPropertyRead(name)
+      }
+
+      override DataFlow::FunctionNode getActionMiddlewareFunction() {
+        result.flowsTo(createActions.getOptionArgument(0, getTypeTag()))
+      }
+
+      override string getTypeTag() {
+        result = name.regexpReplaceAll("([a-z])([A-Z])", "$1_$2").toUpperCase()
+      }
     }
   }
 
   predicate dispatchStep(DataFlow::Node input, DataFlow::SourceNode output) {
-    exists(ReduxToolkitAction action |
-      input = action.getAnActionInput() and
-      output = action.getAnActionOutput()
+    exists(ActionBuilder action |
+      exists(DataFlow::CallNode call | call = action.getAnActionInvocation() |
+        exists(int i |
+          input = call.getArgument(i) and
+          output = action.getActionMiddlewareFunction().getParameter(i)
+        )
+        or
+        not exists(action.getActionMiddlewareFunction()) and
+        input = call.getArgument(0) and
+        output = action.getAPayloadReference()
+      )
+      or
+      input = action.getActionMiddlewareFunction().getReturnNode() and
+      output = action.getAPayloadReference()
     )
   }
 
@@ -85,7 +155,11 @@ module Redux {
   predicate reduxReducerState(API::Node reducer, API::Node state) {
     // Note: There is a deliberate cartesian product in the base case here.
     // In practice there are very few root reducers (1 for the real entry point, plus a few in tests).
-    reducer = API::moduleImport(["redux", "redux-immutable"]).getMember("combineReducers").getParameter(0) and
+    (
+      reducer = API::moduleImport(["redux", "redux-immutable"]).getMember("combineReducers").getParameter(0)
+      or
+      reducer = API::moduleImport("redux-actions").getMember("handleActions").getParameter(0).getAMember()
+    ) and
     state instanceof RootStateNode
     or
     exists(API::Node prevReducer, API::Node prevState, string prop |
@@ -207,17 +281,21 @@ module Redux {
      * Treats call to `this.props.foo(x)` as a dispatch of the `foo` action, if the `foo` action
      * was passed in through `mapDispatchToProps`:
      */
-    private class ReduxToolkitDispatch extends ReduxToolkitAction {
-      DataFlow::Node test() {
-        this = API::moduleImport("redux-actions").getMember("createActions").getReturn().getMember("setDocsVisible") and
-        result = getAUse()
-      }
-
-      override DataFlow::Node getAnAdditionalInput() {
+    private class ReduxToolkitDispatch extends ActionBuilder {
+      override DataFlow::CallNode getAnAdditionalInvocation() {
         exists(ConnectCall call, string name |
-          call.getDispatchPropNode(name) = getAUse() and
-          result = call.getReactComponent().getAPropRead(name).getACall().getArgument(0)
+          ref().flowsTo(call.getDispatchPropNode(name)) and
+          result = call.getReactComponent().getAPropRead(name).getACall()
         )
+      }
+    }
+  }
+
+
+  module Reselect {
+    class ReselectStateNode extends RootStateNode {
+      ReselectStateNode() {
+        this = API::moduleImport("reselect").getMember("createSelector").getParameter(0).getAMember().getParameter(0)
       }
     }
   }
