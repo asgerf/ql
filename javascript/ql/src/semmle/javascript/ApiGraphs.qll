@@ -915,6 +915,9 @@ private module Label {
 
   /** Gets the `promised` edge label connecting a promise to its contained value. */
   string promised() { result = "promised" }
+
+  /** Gets the `forward` edge label connecting a function to an approximately eta-equivalent function. */
+  string forward() { result = "forward" }
 }
 
 /**

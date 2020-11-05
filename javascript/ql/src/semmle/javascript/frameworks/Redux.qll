@@ -121,16 +121,17 @@ module Redux {
 
     /** One of the dispatchers created by a call to `createActions` from `redux-actions`. */
     class MultiAction extends Range {
-      DataFlow::CallNode createActions;
+      API::CallNode createActions;
       string name;
 
       MultiAction() {
         createActions = API::moduleImport("redux-actions").getMember("createActions").getACall() and 
-        this = createActions.getAPropertyRead(name)
+        this = createActions.getReturn().getMember(name).getAnImmediateUse()
       }
 
       override DataFlow::FunctionNode getMiddlewareFunction() {
-        result.flowsTo(createActions.getOptionArgument(0, getTypeTag("type")))
+        // TODO: this could be an API node and then we connect getParameter()/getReturn() for each API node
+        result.flowsTo(createActions.getParameter(0).getMember(getTypeTag("type")).getARhs())
       }
 
       override string getTypeTag(string propName) {
@@ -185,8 +186,34 @@ module Redux {
     result = API::moduleImport("@reduxjs/toolkit").getMember("configureStore").getParameter(0).getMember("reducer")
   }
 
+  /** Gets a data flow node that flows to the root reducer. */
+  private DataFlow::SourceNode nodeLeadingToRootReducer(DataFlow::TypeBackTracker t) {
+    t.start() and
+    result = rootReducer().getARhs().getALocalSource()
+    or
+    exists(DataFlow::Node mid | result.flowsTo(mid) |
+      // Step through forwarding functions
+      DataFlow::functionForwardingStep(mid, nodeLeadingToRootReducer(t.continue()))
+      or
+      // Step through function composition (usually composed with varoius state "enhancer" functions)
+      exists(FunctionCompositionCall compose |
+        
+      )
+      nodeLeadingToRootReducer(t.continue()).(FunctionCompositionCall).getAnOperandNode() = mid
+    )
+    or
+    exists(DataFlow::TypeBackTracker t2 |
+      result = nodeLeadingToRootReducer(t2).backtrack(t2, t)
+    )
+  }
+
+  /** Gets a data flow node that flows to the root reducer. */
+  DataFlow::SourceNode nodeLeadingToRootReducer() {
+    result = nodeLeadingToRootReducer(DataFlow::TypeBackTracker::end())
+  }
+
   /**
-   * Gets an API node corresponding to a `state.prop` access.
+   * Gets an API node corresponding to an access of `prop` on the root state.
    *
    * Since there can be a huge number of root state references, and a much-smaller number
    * of accesses for a given property name `prop`.
@@ -196,11 +223,12 @@ module Redux {
     result = any(RootStateNode n).getMember(prop)
   }
 
-  private API::Node combineReducers(API::Node reducer) {
-    exists(DataFlow::CallNode call |
-      call = API::moduleImport(["redux", "redux-immutable"]).getMember("combineReducers") and
+  private API::Node combineReducers(API::Node reducerObject) {
+    exists(API::CallNode call |
+      call = API::moduleImport(["redux", "redux-immutable"]).getMember("combineReducers").getACall() and
+      reducerObject = call.getParameter(0) and
+      result = call.getReturn()
     )
-    reducer = API::moduleImport(["redux", "redux-immutable"]).getMember("combineReducers").getParameter(0)
   }
 
   /**
@@ -224,14 +252,9 @@ module Redux {
    * ```
    */
   predicate isAccessPathReducer(API::Node reducer, API::Node state) {
-    (
-      rootReducer().refersTo(reducer)
-    )
     // Note: There is a deliberate cartesian product in the base case here.
     // In practice there are very few root reducers for apps that use combineReducers (1 for the real entry point, plus a few in tests).
-    (
-      
-    ) and
+    nodeLeadingToRootReducer() = combineReducers(reducer).getAUse() and
     state instanceof RootStateNode
     or
     exists(API::Node prevReducer, API::Node prevState, string prop |
@@ -259,8 +282,7 @@ module Redux {
     // potentially leading to a bad N^2 edge blow-up. To avoid that, we use the synthetic redux-root-state node
     // as a junction between these, so all reducers flow to the root state, and the root state flows to all its uses.
     exists(API::Node reducer |
-      isRootStateReducer(reducer) and
-      pred = reducer.getReturn().getARhs() and
+      pred = nodeLeadingToRootReducer().(DataFlow::FunctionNode).getReturnNode() and
       succ = rootState()
     )
     or

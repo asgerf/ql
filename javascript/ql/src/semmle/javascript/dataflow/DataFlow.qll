@@ -1744,4 +1744,43 @@ module DataFlow {
   import TypeTracking
 
   predicate localTaintStep = TaintTracking::localTaintStep/2;
+
+  /**
+   * Holds if the function in `succ` forwards all its arguments to a call to `pred` and returns
+   * its result. This can thus be seen as a step `pred -> succ` used for tracking function values
+   * through "wrapper functions", since the `succ` function partially replicates behavior of `pred`.
+   *
+   * Examples:
+   * ```js
+   * // step: g -> f
+   * function f(x) { 
+   *   return g(x);
+   * }
+   * 
+   * // step: exec -> doExec
+   * function doExec(x) {
+   *   console.log(x);
+   *   exec(x);
+   * }
+   * 
+   * // two steps: foo -> doEither and bar -> doEither
+   * function doEither(x, y) {
+   *   if (x > y) {
+   *     return foo(x, y);
+   *   } else {
+   *     return bar(x, y);
+   *   }
+   * }
+   * ```
+   */
+  predicate functionForwardingStep(DataFlow::Node pred, DataFlow::FunctionNode succ) {
+    exists(DataFlow::FunctionNode function, DataFlow::CallNode call |
+      call.flowsTo(function.getReturnNode()) and
+      forall(int i | exists([call.getArgument(i), function.getParameter(i)]) |
+        function.getParameter(i).flowsTo(call.getArgument(i))
+      ) and
+      pred = call.getCalleeNode() and
+      succ = function
+    )
+  }
 }
