@@ -195,11 +195,12 @@ module Redux {
       // Step through forwarding functions
       DataFlow::functionForwardingStep(mid, nodeLeadingToRootReducer(t.continue()))
       or
-      // Step through function composition (usually composed with varoius state "enhancer" functions)
-      exists(FunctionCompositionCall compose |
-        
+      // Step through function composition (usually composed with various state "enhancer" functions)
+      exists(FunctionCompositionCall compose, DataFlow::CallNode call |
+        call = compose.getACall() and
+        nodeLeadingToRootReducer(t.continue()) = call and
+        mid = [compose.getAnOperandNode(), call.getAnArgument()]
       )
-      nodeLeadingToRootReducer(t.continue()).(FunctionCompositionCall).getAnOperandNode() = mid
     )
     or
     exists(DataFlow::TypeBackTracker t2 |
@@ -257,10 +258,58 @@ module Redux {
     nodeLeadingToRootReducer() = combineReducers(reducer).getAUse() and
     state instanceof RootStateNode
     or
+    exists(API::Node prevReducer |
+      isAccessPathReducer(prevReducer, state) and // TODO why empty
+      isTypeSwitchReducer(prevReducer, reducer, _, _)
+    )
+    or
     exists(API::Node prevReducer, API::Node prevState, string prop |
       isAccessPathReducer(prevReducer, prevState) and
-      reducer = prevReducer.getMember(prop) and
+      isStatePathReducer(prevReducer, reducer, prop) and
       state = prevState.getMember(prop)
+    )
+  }
+
+  private API::Node targetOf(API::Node node) {
+    result.refersTo(node)
+  }
+
+  private API::Node sourceOf(API::Node node) {
+    node.refersTo(result)
+  }
+
+  /**
+   * Holds if `outerReducer` passes `state.prop` onto `innerReducer`, that is, it behaves like a function of form:
+   * ```js
+   * function outerReducer(state, action) {
+   *   return {
+   *     prop: innerReducer(state.prop, action),
+   *     ...
+   *   }
+   * }
+   * ```
+   */
+  predicate isStatePathReducer(API::Node outerReducer, API::Node innerReducer, string prop) {
+    exists(API::CallNode call |
+      call = API::moduleImport(["redux", "redux-immutable"]).getMember("combineReducers").getACall() and
+      innerReducer = call.getParameter(0).getMember(prop) and
+      outerReducer = call.getReturn()
+    )
+    or
+    isStatePathReducer(_, outerReducer, _) and
+    innerReducer = outerReducer.getMember(prop)
+  }
+
+  /**
+   * Holds if actions dispatched to `outerReducer` are forwarded to `innerReducer`,
+   * if its `propName` has value `propValue`.
+   */
+  predicate isTypeSwitchReducer(API::Node outerReducer, API::Node innerReducer, string propName, string propValue) {
+    exists(API::CallNode call |
+      call = API::moduleImport("redux-actions").getMember("handleActions").getACall() and
+      outerReducer = call.getReturn() and
+      innerReducer = call.getParameter(0).getMember(propValue) and
+      propName = "type"
     )
   }
 
