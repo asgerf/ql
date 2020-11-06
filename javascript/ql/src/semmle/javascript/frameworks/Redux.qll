@@ -220,27 +220,68 @@ module Redux {
   }
 
   /**
-   * Gets an API node corresponding to an access of `prop` on the root state.
+   * Holds if `outerReducer` delegates handling of `state.prop` to `innerReducer`.
    *
-   * Since there can be a huge number of root state references, and a much-smaller number
-   * of accesses for a given property name `prop`.
+   * Semantically it recognizes API calls to functions that essentially have this form:
+   * ```js
+   * function outerReducer(state, action) {
+   *   return {
+   *     prop: innerReducer(state.prop, action),
+   *     ...
+   *   }
+   * }
+   * 
+   * // Code actually matched by this predicate (semantically equivalent to the above)
+   * let outerReducer = combineReducers({
+   *   prop: innerReducer
+   * })
+   * ```
    */
-  pragma[noinline]
-  private API::Node rootStateProp(string prop) { result = any(RootStateNode n).getMember(prop) }
-
-  private API::Node combineReducers(API::Node reducerObject) {
+  predicate isStatePathReducer(API::Node outerReducer, API::Node innerReducer, string prop) {
     exists(API::CallNode call |
       call = API::moduleImport(["redux", "redux-immutable"]).getMember("combineReducers").getACall() and
-      reducerObject = call.getParameter(0) and
-      result = call.getReturn()
+      innerReducer = call.getParameter(0).getMember(prop) and
+      outerReducer = call.getReturn()
+    )
+    or
+    isStatePathReducer(_, outerReducer, _) and
+    innerReducer = outerReducer.getMember(prop)
+  }
+
+  /**
+   * Holds if actions dispatched to `outerReducer` are forwarded to `innerReducer`
+   * when its property `propName` has value `propValue`.
+   *
+   * One can think of it as a function of the form:
+   * ```js
+   * function outerReducer(state, action) {
+   *   if (action.propName === 'propValue') {
+   *     return innerReducer(state, action);
+   *   }
+   *   ...
+   * }
+   *
+   * // Code actually matched by this predicate (semantically equivalent to the above, with propName = "type")
+   * let outerReducer = handleActions({
+   *   propValue: innerReducer
+   * })
+   */
+  predicate isTypeSwitchReducer(
+    API::Node outerReducer, API::Node innerReducer, string propName, string propValue
+  ) {
+    exists(API::CallNode call |
+      call = API::moduleImport("redux-actions").getMember("handleActions").getACall() and
+      outerReducer = call.getReturn() and
+      innerReducer = call.getParameter(0).getMember(propValue) and
+      propName = "type"
     )
   }
 
   /**
-   * Holds if the return-value of `reducer` should flow to `state`.
+   * Holds if the return value of `reducer` should flow to `state`.
    *
-   * This holds for reducers built using `combineReducers` where the access path leading to the reducer
-   * corresponds to the access path in the state.
+   * To avoid a full cartesian product between all root reducers and all root state accesses, this
+   * predicate only includes reducers that operate on some access path within the state.
    *
    * For example, the callback in the `foo` property `.foo` access on the root state, and the
    * callback on the `baz` property corresponds to the `.bar.baz` access:
@@ -256,88 +297,45 @@ module Redux {
    * getRootState().bar.baz // sees value from bar.baz reducer
    * ```
    */
-  predicate isAccessPathReducer(API::Node reducer, API::Node state) {
-    // Note: There is a deliberate cartesian product in the base case here.
-    // In practice there are very few root reducers for apps that use combineReducers (1 for the real entry point, plus a few in tests).
-    nodeLeadingToRootReducer() = combineReducers(reducer).getAUse() and
-    state instanceof RootStateNode
+  predicate reducerAffectsStateAccessPath(API::Node reducer, API::Node state) {
+    exists(API::Node outerReducer, string prop |
+      isStatePathReducer(outerReducer, reducer, prop) and
+      state = rootStateProp(prop) and
+      nodeLeadingToRootReducer() = outerReducer.getAUse()
+    )
     or
     exists(API::Node prevReducer |
-      isAccessPathReducer(prevReducer, state) and // TODO why empty
+      reducerAffectsStateAccessPath(prevReducer, state) and
       isTypeSwitchReducer(sourceOf(prevReducer), reducer, _, _)
     )
     or
     exists(API::Node prevReducer, API::Node prevState, string prop |
-      isAccessPathReducer(prevReducer, prevState) and
+      reducerAffectsStateAccessPath(prevReducer, prevState) and
       isStatePathReducer(sourceOf(prevReducer), reducer, prop) and
       state = prevState.getMember(prop)
     )
   }
 
-  private API::Node targetOf(API::Node node) { result.refersTo(node) }
-
+  /** Gets an API node that flows to `node`. */
   private API::Node sourceOf(API::Node node) { node.refersTo(result) }
 
-  predicate test(Import imprt, Module target) {
-    count(imprt.getImportedModuleNode()) > 1 and
-    target = imprt.getImportedModule()
-  }
+  /** Gets an API node corresponding to an access of `prop` on the root state. */
+  pragma[noinline]
+  private API::Node rootStateProp(string prop) { result = any(RootStateNode n).getMember(prop) }
 
   /**
-   * Holds if `outerReducer` passes `state.prop` onto `innerReducer`, that is, it behaves like a function of form:
-   * ```js
-   * function outerReducer(state, action) {
-   *   return {
-   *     prop: innerReducer(state.prop, action),
-   *     ...
-   *   }
-   * }
-   * ```
+   * Holds if the step `pred -> succ` goes from the return value of a reducer to a state access.
    */
-  predicate isStatePathReducer(API::Node outerReducer, API::Node innerReducer, string prop) {
-    exists(API::CallNode call |
-      call = API::moduleImport(["redux", "redux-immutable"]).getMember("combineReducers").getACall() and
-      innerReducer = call.getParameter(0).getMember(prop) and
-      outerReducer = call.getReturn()
-    )
-    or
-    isStatePathReducer(_, outerReducer, _) and
-    innerReducer = outerReducer.getMember(prop)
-  }
-
-  /**
-   * Holds if actions dispatched to `outerReducer` are forwarded to `innerReducer`,
-   * if its `propName` has value `propValue`.
-   */
-  predicate isTypeSwitchReducer(
-    API::Node outerReducer, API::Node innerReducer, string propName, string propValue
-  ) {
-    exists(API::CallNode call |
-      call = API::moduleImport("redux-actions").getMember("handleActions").getACall() and
-      outerReducer = call.getReturn() and
-      innerReducer = call.getParameter(0).getMember(propValue) and
-      propName = "type"
-    )
-  }
-
-  /**
-   * Holds if `reducer` is a function transforming the root state (but possibly only for a subset of actions).
-   */
-  predicate isRootStateReducer(API::Node reducer) {
-    reducer =
-      API::moduleImport("redux-actions").getMember("handleActions").getParameter(0).getAMember()
-  }
-
   predicate reducerStep(DataFlow::Node pred, DataFlow::Node succ) {
     exists(API::Node reducer, API::Node state |
-      isAccessPathReducer(reducer, state) and
+      reducerAffectsStateAccessPath(reducer, state) and
       pred = reducer.getReturn().getARhs() and
       succ = state.getAUse()
     )
     or
-    // Apps that don't use `combineReducer` tend to have a large number of both reducers and state accesses,
-    // potentially leading to a bad N^2 edge blow-up. To avoid that, we use the synthetic redux-root-state node
-    // as a junction between these, so all reducers flow to the root state, and the root state flows to all its uses.
+    // For reducers that operate on the root state, we want to avoid a full cartesian product between
+    // reducers and state accesses. To this end, we use the synthetic `redux-root-state` node as a junction,
+    // so all reducers have a step to the root state, and the root state has a step to all its uses.
     exists(API::Node reducer |
       pred = nodeLeadingToRootReducer().(DataFlow::FunctionNode).getReturnNode() and
       succ = rootState()
