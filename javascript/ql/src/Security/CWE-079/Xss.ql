@@ -24,6 +24,5 @@ where
   cfg.hasFlowPath(source, sink) and
   not sink.getNode() = any(ExprStmt stmt).getExpr().flow() and
   not sink.getNode() = any(MethodCallExpr m).getCallee().flow()
-select sink.getNode(), source, sink,
-  " vulnerability due to $@.", source.getNode(),
+select sink.getNode(), source, sink, " vulnerability due to $@.", source.getNode(),
   "user-provided value"

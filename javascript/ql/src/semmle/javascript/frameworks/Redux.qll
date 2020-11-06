@@ -18,7 +18,8 @@ module Redux {
     ReduxRootStateTag() { this = "redux-root-state" }
   }
 
-  private class ReduxRootStateNode extends DataFlow::CustomNodes::SingletonNode, DataFlow::SourceNode::Range {
+  private class ReduxRootStateNode extends DataFlow::CustomNodes::SingletonNode,
+    DataFlow::SourceNode::Range {
     override ReduxRootStateTag tag;
   }
 
@@ -27,7 +28,6 @@ module Redux {
   //
   // DISPATCH TO REDUCER
   //
-
   /**
    * A value which, when invoked as a function, creates and/or dispatches an action to the Redux store.
    *
@@ -52,15 +52,11 @@ module Redux {
       t.start() and
       result = this
       or
-      exists(DataFlow::TypeTracker t2 |
-        result = ref(t2).track(t2, t)
-      )
+      exists(DataFlow::TypeTracker t2 | result = ref(t2).track(t2, t))
     }
-    
+
     /** Gets a data flow node referring to this dispatcher. */
-    DataFlow::SourceNode ref() {
-      result = ref(DataFlow::TypeTracker::end())
-    }
+    DataFlow::SourceNode ref() { result = ref(DataFlow::TypeTracker::end()) }
 
     /** Gets a call to the dispatcher. */
     final DataFlow::CallNode getADispatchInvocation() {
@@ -97,20 +93,30 @@ module Redux {
         guard.dominates(result.getBasicBlock())
       )
       or
-      result = API::moduleImport("redux-actions").getMember("handleActions").getParameter(0).getMember(getTypeTag("type")).getParameter(1).getAUse()
+      result =
+        API::moduleImport("redux-actions")
+            .getMember("handleActions")
+            .getParameter(0)
+            .getMember(getTypeTag("type"))
+            .getParameter(1)
+            .getAUse()
     }
   }
 
   module Dispatcher {
     abstract class Range extends DataFlow::SourceNode {
       DataFlow::FunctionNode getMiddlewareFunction() { none() }
+
       string getTypeTag(string propName) { none() }
     }
 
     /** A dispatcher created by `createAction` from either `@reduxjs/toolkit` or `redux-actions`. */
     class SingleAction extends Range, DataFlow::CallNode {
       SingleAction() {
-        this = API::moduleImport(["@reduxjs/toolkit", "redux-actions"]).getMember("createAction").getACall()
+        this =
+          API::moduleImport(["@reduxjs/toolkit", "redux-actions"])
+              .getMember("createAction")
+              .getACall()
       }
 
       override string getTypeTag(string propName) {
@@ -125,7 +131,7 @@ module Redux {
       string name;
 
       MultiAction() {
-        createActions = API::moduleImport("redux-actions").getMember("createActions").getACall() and 
+        createActions = API::moduleImport("redux-actions").getMember("createActions").getACall() and
         this = createActions.getReturn().getMember(name).getAnImmediateUse()
       }
 
@@ -171,19 +177,21 @@ module Redux {
   //
   // REDUCER TO STATE ACCESS
   //
-
   /**
    * EXPERIMENTAL. This API is public may have breaking changes in the future.
    *
    * An API node corresponding to a reference to the root state object in a Redux app.
    */
-  abstract class RootStateNode extends API::Node {
-  }
+  abstract class RootStateNode extends API::Node { }
 
   API::Node rootReducer() {
     result = API::moduleImport("redux").getMember("createStore").getParameter(0)
     or
-    result = API::moduleImport("@reduxjs/toolkit").getMember("configureStore").getParameter(0).getMember("reducer")
+    result =
+      API::moduleImport("@reduxjs/toolkit")
+          .getMember("configureStore")
+          .getParameter(0)
+          .getMember("reducer")
   }
 
   /** Gets a data flow node that flows to the root reducer. */
@@ -203,9 +211,7 @@ module Redux {
       )
     )
     or
-    exists(DataFlow::TypeBackTracker t2 |
-      result = nodeLeadingToRootReducer(t2).backtrack(t2, t)
-    )
+    exists(DataFlow::TypeBackTracker t2 | result = nodeLeadingToRootReducer(t2).backtrack(t2, t))
   }
 
   /** Gets a data flow node that flows to the root reducer. */
@@ -220,9 +226,7 @@ module Redux {
    * of accesses for a given property name `prop`.
    */
   pragma[noinline]
-  private API::Node rootStateProp(string prop) {
-    result = any(RootStateNode n).getMember(prop)
-  }
+  private API::Node rootStateProp(string prop) { result = any(RootStateNode n).getMember(prop) }
 
   private API::Node combineReducers(API::Node reducerObject) {
     exists(API::CallNode call |
@@ -260,22 +264,23 @@ module Redux {
     or
     exists(API::Node prevReducer |
       isAccessPathReducer(prevReducer, state) and // TODO why empty
-      isTypeSwitchReducer(prevReducer, reducer, _, _)
+      isTypeSwitchReducer(sourceOf(prevReducer), reducer, _, _)
     )
     or
     exists(API::Node prevReducer, API::Node prevState, string prop |
       isAccessPathReducer(prevReducer, prevState) and
-      isStatePathReducer(prevReducer, reducer, prop) and
+      isStatePathReducer(sourceOf(prevReducer), reducer, prop) and
       state = prevState.getMember(prop)
     )
   }
 
-  private API::Node targetOf(API::Node node) {
-    result.refersTo(node)
-  }
+  private API::Node targetOf(API::Node node) { result.refersTo(node) }
 
-  private API::Node sourceOf(API::Node node) {
-    node.refersTo(result)
+  private API::Node sourceOf(API::Node node) { node.refersTo(result) }
+
+  predicate test(Import imprt, Module target) {
+    count(imprt.getImportedModuleNode()) > 1 and
+    target = imprt.getImportedModule()
   }
 
   /**
@@ -304,7 +309,9 @@ module Redux {
    * Holds if actions dispatched to `outerReducer` are forwarded to `innerReducer`,
    * if its `propName` has value `propValue`.
    */
-  predicate isTypeSwitchReducer(API::Node outerReducer, API::Node innerReducer, string propName, string propValue) {
+  predicate isTypeSwitchReducer(
+    API::Node outerReducer, API::Node innerReducer, string propName, string propValue
+  ) {
     exists(API::CallNode call |
       call = API::moduleImport("redux-actions").getMember("handleActions").getACall() and
       outerReducer = call.getReturn() and
@@ -317,7 +324,8 @@ module Redux {
    * Holds if `reducer` is a function transforming the root state (but possibly only for a subset of actions).
    */
   predicate isRootStateReducer(API::Node reducer) {
-    reducer = API::moduleImport("redux-actions").getMember("handleActions").getParameter(0).getAMember()
+    reducer =
+      API::moduleImport("redux-actions").getMember("handleActions").getParameter(0).getAMember()
   }
 
   predicate reducerStep(DataFlow::Node pred, DataFlow::Node succ) {
@@ -340,16 +348,12 @@ module Redux {
   }
 
   private class ReducerStep extends DataFlow::AdditionalFlowStep {
-    ReducerStep() {
-      reducerStep(this, _)
-    }
+    ReducerStep() { reducerStep(this, _) }
 
     override predicate step(DataFlow::Node pred, DataFlow::Node succ) {
       reducerStep(this, succ) and pred = this
     }
   }
-
-
 
   // React-redux model
   private module ReactRedux {
@@ -357,11 +361,9 @@ module Redux {
 
     /** The first argument to a `mapStateToProps` function, seen as a redux state. */
     private class ReactConnectState extends RootStateNode {
-      ReactConnectState() {
-        this = connect().getParameter(0).getParameter(0)
-      }
+      ReactConnectState() { this = connect().getParameter(0).getParameter(0) }
     }
-  
+
     /**
      * A call to `connect()`, typically as part of a code pattern like the following:
      * ```js
@@ -371,7 +373,7 @@ module Redux {
      */
     private class ConnectCall extends DataFlow::CallNode {
       ConnectCall() { this = connect().getACall() }
-  
+
       /**
        * Gets a function whose first argument becomes the React component to connect.
        */
@@ -387,23 +389,17 @@ module Redux {
       /**
        * Gets the function flowing to the first argument to `connect`, usually known as `mapStateToProps`.
        */
-      DataFlow::FunctionNode getMapStateToPropsFunction() {
-        result = getCallback(0)
-      }
+      DataFlow::FunctionNode getMapStateToPropsFunction() { result = getCallback(0) }
 
       /**
        * Gets the second argument to `connect`, usually known as `mapDispatchToProps`.
        */
-      DataFlow::Node getMapDispatchToPropsNode() {
-        result = getArgument(1)
-      }
+      DataFlow::Node getMapDispatchToPropsNode() { result = getArgument(1) }
 
       /**
        * Gets the second argument to `connect`, usually known as `mapDispatchToProps`.
        */
-      DataFlow::FunctionNode getMapDispatchToPropsFunction() {
-        result = getCallback(1)
-      }
+      DataFlow::FunctionNode getMapDispatchToPropsFunction() { result = getCallback(1) }
 
       /**
        * Gets a data-flow node that should flow to `props.name` via the `mapDispatchToProps` function.
@@ -417,12 +413,14 @@ module Redux {
           result = bind.getOptionArgument(0, name)
         )
       }
-  
+
       /**
        * Gets the React component decorated by this call, if one can be determined.
        */
       ReactComponent getReactComponent() {
-        result.getAComponentCreatorReference().flowsTo(getAComponentTransformer().getACall().getArgument(0))
+        result
+            .getAComponentCreatorReference()
+            .flowsTo(getAComponentTransformer().getACall().getArgument(0))
       }
     }
 
@@ -433,7 +431,8 @@ module Redux {
         or
         // Boost property depth tracking
         exists(string name |
-          pred = getMapStateToPropsFunction().getReturnNode().getALocalSource().getAPropertySource(name) and
+          pred =
+            getMapStateToPropsFunction().getReturnNode().getALocalSource().getAPropertySource(name) and
           succ = getReactComponent().getAPropRead(name)
         )
       }
@@ -453,11 +452,15 @@ module Redux {
     }
   }
 
-
   module Reselect {
     class ReselectStateNode extends RootStateNode {
       ReselectStateNode() {
-        this = API::moduleImport("reselect").getMember("createSelector").getParameter(0).getAMember().getParameter(0)
+        this =
+          API::moduleImport("reselect")
+              .getMember("createSelector")
+              .getParameter(0)
+              .getAMember()
+              .getParameter(0)
       }
     }
   }

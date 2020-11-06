@@ -1281,9 +1281,7 @@ module DataFlow {
 
       SingletonNode() { this = TCustomSingletonNode(tag) }
 
-      override string toString() {
-        result = "singleton-node(" + tag + ")"
-      }
+      override string toString() { result = "singleton-node(" + tag + ")" }
     }
 
     /**
@@ -1338,9 +1336,7 @@ module DataFlow {
             .hasLocationInfo(filepath, startline, startcolumn, endline, endcolumn)
       }
 
-      override string toString() {
-        result = "locatable-node(" + tag + ")"
-      }
+      override string toString() { result = "locatable-node(" + tag + ")" }
     }
   }
 
@@ -1753,16 +1749,16 @@ module DataFlow {
    * Examples:
    * ```js
    * // step: g -> f
-   * function f(x) { 
+   * function f(x) {
    *   return g(x);
    * }
-   * 
+   *
    * // step: exec -> doExec
    * function doExec(x) {
    *   console.log(x);
    *   exec(x);
    * }
-   * 
+   *
    * // two steps: foo -> doEither and bar -> doEither
    * function doEither(x, y) {
    *   if (x > y) {
