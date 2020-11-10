@@ -357,9 +357,27 @@ module Redux {
   private module ReactRedux {
     API::Node connect() { result = API::moduleImport("react-redux").getMember("connect") }
 
-    /** The first argument to a `mapStateToProps` function, seen as a redux state. */
-    private class ReactConnectState extends RootStateNode {
-      ReactConnectState() { this = connect().getParameter(0).getParameter(0) }
+    API::Node useSelector() { result = API::moduleImport("react-redux").getMember("useSelector") }
+
+    /** The state argument to a `mapToStateProps` function or `useSelector` callback */
+    private class ReactReduxStateSource extends RootStateNode {
+      ReactReduxStateSource() {
+        this = connect().getParameter(0).getParameter(0) 
+        or
+        this = useSelector().getParameter(0).getParameter(0)
+      }
+    }
+
+    /**
+     * Step out of a `useSelector` call, such as from `state.x` to the result of `useSelector(state => state.x)`.
+     */
+    class UseSelectorStep extends API::CallNode, DataFlow::AdditionalFlowStep {
+      UseSelectorStep() { this = useSelector().getACall() }
+    
+      override predicate step(DataFlow::Node pred, DataFlow::Node succ) {
+        pred = getParameter(0).getReturn().getARhs() and
+        succ = this
+      }
     }
 
     /**
