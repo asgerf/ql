@@ -451,14 +451,53 @@ module Redux {
   }
 
   module Reselect {
-    class ReselectStateNode extends RootStateNode {
-      ReselectStateNode() {
-        this =
-          API::moduleImport("reselect")
-              .getMember("createSelector")
-              .getParameter(0)
-              .getAMember()
-              .getParameter(0)
+    class CreateSelectorCall extends API::CallNode {
+      CreateSelectorCall() {
+        this = API::moduleImport("reselect").getMember("createSelector").getACall()
+      }
+
+      API::Node getSelectorFunction(int i) {
+        // When there are multiple callbacks, exclude the last one
+        result = getParameter(i) and
+        (i = 0 or i < getNumArgument() - 1)
+        or
+        exists(DataFlow::ArrayCreationNode array |
+          array.flowsTo(getArgument(0)) and
+          result.getAUse() = array.getElement(i)
+        )
+      }
+    }
+
+    /** The state argument to a selector */
+    private class SelectorStateArg extends RootStateNode {
+      SelectorStateArg() {
+        this = any(CreateSelectorCall c).getSelectorFunction(_).getParameter(0)
+      }
+    }
+      
+    predicate selectorStep(DataFlow::Node pred, DataFlow::Node succ) {
+      // Return value of `i`th callback flows to the `i`th parameter of the last callback.
+      exists(CreateSelectorCall call, int index |
+        call.getNumArgument() > 1 and
+        pred = call.getSelectorFunction(index).getReturn().getARhs() and
+        succ = call.getLastParameter().getParameter(index).getAnImmediateUse()
+      )
+      or
+      // The result of the last callback is the final result
+      exists(CreateSelectorCall call |
+        pred = call.getLastParameter().getReturn().getARhs() and
+        succ = call
+      )
+    }
+
+    class SelectorStep extends DataFlow::AdditionalFlowStep {
+      SelectorStep() {
+        selectorStep(_, this)
+      }
+
+      override predicate step(DataFlow::Node pred, DataFlow::Node succ) {
+        selectorStep(pred, succ) and
+        this = succ
       }
     }
   }
