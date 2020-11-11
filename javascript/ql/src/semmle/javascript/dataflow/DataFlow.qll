@@ -1748,28 +1748,33 @@ module DataFlow {
    *
    * Examples:
    * ```js
-   * // step: g -> f
    * function f(x) {
-   *   return g(x);
+   *   return g(x); // step: g -> f
    * }
    *
-   * // step: exec -> doExec
    * function doExec(x) {
    *   console.log(x);
-   *   exec(x);
+   *   return exec(x); // step: exec -> doExec
    * }
    *
-   * // two steps: foo -> doEither and bar -> doEither
    * function doEither(x, y) {
    *   if (x > y) {
-   *     return foo(x, y);
+   *     return foo(x, y); // step: foo -> doEither
    *   } else {
-   *     return bar(x, y);
+   *     return bar(x, y); // step: bar -> doEither
    *   }
    * }
+   *
+   * function wrapWithLogging(f) {
+   *   return (x) => {
+   *     console.log(x);
+   *     return f(x); // step: f -> anonymous function
+   *   }
+   * }
+   * wrapWithLogging(g); // step: g -> wrapWithLogging(g)
    * ```
    */
-  predicate functionForwardingStep(DataFlow::Node pred, DataFlow::FunctionNode succ) {
+  predicate functionForwardingStep(DataFlow::Node pred, DataFlow::Node succ) {
     exists(DataFlow::FunctionNode function, DataFlow::CallNode call |
       call.flowsTo(function.getReturnNode()) and
       forall(int i | exists([call.getArgument(i), function.getParameter(i)]) |
@@ -1777,6 +1782,17 @@ module DataFlow {
       ) and
       pred = call.getCalleeNode() and
       succ = function
+    )
+    or
+    // Given a generic wrapper function like,
+    //
+    //   function wrap(f) { return (x, y) => f(x, y) };
+    //
+    // add steps through calls to that function: `g -> wrap(g)`
+    exists(DataFlow::FunctionNode wrapperFunction, SourceNode param, Node paramUse |
+      FlowSteps::argumentPassing(succ, pred, wrapperFunction.getFunction(), param) and
+      param.flowsTo(paramUse) and
+      functionForwardingStep(paramUse, wrapperFunction.getReturnNode().getALocalSource())
     )
   }
 }

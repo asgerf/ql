@@ -1,0 +1,2 @@
+| reducers.js:6:10:11:5 | def (member foo (parameter 0 (member combineReducers (member exports (module redux))))) | reducers.js:15:49:15:57 | use (member foo (parameter 0 (parameter 0 (member createSelector (member exports (module reselect)))))) |
+| reducers.js:6:10:11:5 | def (member foo (parameter 0 (member combineReducers (member exports (module redux))))) | reducers.js:16:46:16:54 | use (member foo (parameter 0 (parameter 0 (member createSelector (member exports (module reselect)))))) |
