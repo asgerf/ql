@@ -99,7 +99,7 @@ module Redux {
       or
       this = any(DelegatingReducer r).getStateHandlerArg(_)
       or
-      this = any(DelegatingReducer r).getTypeTagHandlerArg(_)
+      this = any(DelegatingReducer r).getActionHandlerArg(_)
     }
 
     /** Gets a data flow node that flows to this reducer argument. */
@@ -129,14 +129,26 @@ module Redux {
     DataFlow::SourceNode getASource() { result = getASource(DataFlow::TypeBackTracker::end()) }
 
     /**
-     * Holds if the actions dispatched to this reducer have the property `type` set to `propValue`.
+     * Holds if the actions discpatched to thsi reducer have the given type, that is,
+     * it is created by an action creator that flows to `actionType`, or has `action.type` set to
+     * the string value of `actionType`.
      */
-    predicate isTypeTagHandler(string propValue) {
+    predicate isActionTypeHandler(DataFlow::Node actionType) {
       exists(DelegatingReducer r |
-        this = r.getTypeTagHandlerArg(propValue)
+        this = r.getActionHandlerArg(actionType)
         or
         this = r.getStateHandlerArg(_) and
-        r.getUseSite().isTypeTagHandler(propValue)
+        r.getUseSite().isActionTypeHandler(actionType)
+      )
+    }
+
+    /**
+     * Holds if the actions dispatched to this reducer have the given `action.type` value.
+     */
+    predicate isTypeTagHandler(string actionType) {
+      exists(DataFlow::Node node |
+        isActionTypeHandler(node) and
+        actionType = getATypeTagFromNode(node)
       )
     }
 
@@ -147,7 +159,7 @@ module Redux {
       this = any(StoreCreation c).getReducerArg()
       or
       exists(DelegatingReducer r |
-        this = r.getTypeTagHandlerArg(_) and
+        this = r.getActionHandlerArg(_) and
         r.getUseSite().isRootStateHandler()
       )
     }
@@ -159,7 +171,7 @@ module Redux {
      */
     private API::Node getAnAffectedStateApiNode() {
       exists(DelegatingReducer r |
-        this = r.getTypeTagHandlerArg(_) and
+        this = r.getActionHandlerArg(_) and
         result = r.getUseSite().getAnAffectedStateApiNode()
         or
         exists(string prop | this = r.getStateHandlerArg(prop) |
@@ -187,11 +199,12 @@ module Redux {
 
     /**
      * Gets a data flow node holding a reducer to which this one forwards its arguments when
-     * `action.type = propValue`.
+     * the dispatched action is of the given type.
      *
-     * TODO: Is the action going to be the action `payload` or the raw action?
+     * `actionType` may refer to a string value corresponding to `action.type`, or an action creator, if
+     * this reducer handles actions created by that.
      */
-    DataFlow::Node getTypeTagHandlerArg(string propValue) { none() }
+    DataFlow::Node getActionHandlerArg(DataFlow::Node actionType) { none() }
 
     /**
      * Gets a data flow node holding a reducer to which this one forwards every (state, action) pair
@@ -203,17 +216,42 @@ module Redux {
     final ReducerArg getUseSite() { result.getASource() = this }
   }
 
+  private API::Node combineReducers() {
+    result = API::moduleImport(["redux", "redux-immutable", "@reduxjs/toolkit"]).getMember("combineReducers")
+  }
+
+  /**
+   * A call to `combineReducers`, which delegates properties of `state` to individual sub-reducers.
+   */
   private class CombineReducers extends API::CallNode, DelegatingReducer {
     CombineReducers() {
-      this = API::moduleImport(["redux", "redux-immutable", "@reduxjs/toolkit"]).getMember("combineReducers").getACall()
+      this = combineReducers().getACall()
     }
 
     override DataFlow::Node getStateHandlerArg(string prop) {
-      // TODO: nested reducers
       result = getParameter(0).getMember(prop).getARhs()
     }
   }
 
+  /**
+   * An object literal flowing into a nested property in a `combineReducers` object, such as the `{ bar }` object in:
+   * ```js
+   * combineReducers({ foo: { bar } })
+   * ```
+   *
+   * Although the object itself is clearly not a function, we use the object to model the corresponding reducer function created by `combineReducers`.
+   */
+  private class NestedCombineReducers extends DelegatingReducer, DataFlow::ObjectLiteralNode {
+    NestedCombineReducers() {
+      this = combineReducers().getParameter(0).getAMember+().getAValueReachingRhs()
+    }
+
+    override DataFlow::Node getStateHandlerArg(string prop) {
+      result = getAPropertyWrite(prop).getRhs()
+    }
+  }
+
+  /** Gets the `redux-actions` library or one similar enough that we can model them as identical. */
   private API::Node reduxActionsLike() {
     result = API::moduleImport(["redux-actions", "redux-ts-utils"])
   }
@@ -252,17 +290,11 @@ module Redux {
       this = reduxActionsLike().getMember("handleActions").getACall()
     }
 
-    override DataFlow::Node getTypeTagHandlerArg(string propValue) {
-      result = getParameter(0).getMember(propValue).getARhs()
-      or
-      // The property name may be the result of `combineActions`:
-      //
-      //   { [combineActions(a1, a2)]: (state, action) => { ... }}
-      //
+    override DataFlow::Node getActionHandlerArg(DataFlow::Node actionType) {
       exists(DataFlow::PropWrite write |
-        write = getParameter(0).getARhs().getALocalSource().getAPropertyWrite() and
-        propValue = getAnActionTypeTag(write.getPropertyNameExpr().flow().getALocalSource()) and
-        result = write.getRhs()
+        result = getParameter(0).getAMember().getARhs() and
+        write.getRhs() = result and
+        actionType = write.getPropertyNameExpr().flow()
       )
     }
   }
@@ -272,9 +304,9 @@ module Redux {
       this = reduxActionsLike().getMember("handleAction").getACall()
     }
 
-    override DataFlow::Node getTypeTagHandlerArg(string propValue) {
-      result = getArgument(1) and
-      propValue = getATypeTagFromNode(getArgument(0))
+    override DataFlow::Node getActionHandlerArg(DataFlow::Node actionType) {
+      actionType = getArgument(0) and
+      result = getArgument(1)
     }
   }
 
@@ -318,11 +350,66 @@ module Redux {
       result = getABuilderRef().getAMember().getReturn()
     }
 
-    override DataFlow::Node getTypeTagHandlerArg(string propValue) {
+    override DataFlow::Node getActionHandlerArg(DataFlow::Node actionType) {
       exists(API::CallNode addCase |
         addCase = getABuilderRef().getMember("addCase").getACall() and
-        result = addCase.getArgument(1) and
-        propValue = getATypeTagFromNode(addCase.getArgument(0))
+        actionType = addCase.getArgument(0) and
+        result = addCase.getArgument(1)
+      )
+    }
+  }
+
+  private class CreateSliceReducer extends DelegatingReducer {
+    API::CallNode call;
+
+    CreateSliceReducer() {
+      call = API::moduleImport("@reduxjs/toolkit").getMember("createSlice").getACall() and
+      this = call.getReturn().getMember("reducer").getAnImmediateUse()
+    }
+
+    private API::Node getABuilderRef() {
+      result = call.getParameter(0).getMember("extraReducers").getParameter(0)
+      or
+      result = getABuilderRef().getAMember().getReturn()
+    }
+
+    override DataFlow::Node getActionHandlerArg(DataFlow::Node actionType) {
+      exists(string name |
+        result = call.getParameter(0).getMember("reducers").getMember(name).getARhs() and
+        actionType = call.getReturn().getMember("actions").getMember(name).getAnImmediateUse()
+      )
+      or
+      // Properties of 'extraReducers':
+      //   { extraReducers: { [action]: reducer }}
+      exists(DataFlow::PropWrite write |
+        result = call.getParameter(0).getMember("extraReducers").getAMember().getARhs() and
+        write.getRhs() = result and
+        actionType = write.getPropertyNameExpr().flow()
+      )
+      or
+      // Builder callback to 'extraReducers':
+      //   extraReducers: builder => builder.addCase(action, reducer)
+      exists(API::CallNode addCase |
+        addCase = getABuilderRef().getMember("addCase").getACall() and
+        actionType = addCase.getArgument(0) and
+        result = addCase.getArgument(1)
+      )
+    }
+  }
+
+  private class CreateSliceAction extends ActionCreator::Range {
+    API::CallNode call;
+    string actionName;
+
+    CreateSliceAction() {
+      call = API::moduleImport("@reduxjs/toolkit").getMember("createSlice").getACall() and
+      this = call.getReturn().getMember("actions").getMember(actionName).getAnImmediateUse()
+    }
+
+    override string getTypeTag() {
+      exists(string prefix |
+        call.getParameter(0).getMember("name").getARhs().mayHaveStringValue(prefix) and
+        result = prefix + "/" + actionName
       )
     }
   }
@@ -344,7 +431,7 @@ module Redux {
     StoreDispatchSource() { this = any(StoreCreation c).ref().getAPropertyRead("dispatch") }
   }
 
-  /** Gets a data flow node referring to a thing. */
+  /** Gets a data flow node referring to the `dispatch` function. */
   private DataFlow::SourceNode getADispatchFunctionReference(DataFlow::TypeTracker t) {
     t.start() and
     result instanceof DispatchFunctionSource
@@ -358,12 +445,12 @@ module Redux {
     exists(DataFlow::TypeTracker t2 | result = getADispatchFunctionReference(t2).track(t2, t))
   }
 
-  /** Gets a data flow node referring to a thing. */
+  /** Gets a data flow node referring to the `dispatch` function. */
   DataFlow::SourceNode getADispatchFunctionReference() {
     result = getADispatchFunctionReference(DataFlow::TypeTracker::end())
   }
 
-  /** Gets a data flow node referring to a thing. */
+  /** Gets a data flow node that is dispatched as an action. */
   private DataFlow::SourceNode getADispatchedValueSource(DataFlow::TypeBackTracker t) {
     t.start() and
     result = any(DispatchedValueSink d).getALocalSource()
@@ -374,7 +461,9 @@ module Redux {
     exists(DataFlow::TypeBackTracker t2 | result = getADispatchedValueSource(t2).backtrack(t2, t))
   }
 
-  /** Gets a data flow node referring to a thing. */
+  /**
+   * Gets a data flow node that is dispatched as an action, that is, it flows to the first argument of `dispatch`.
+   */
   DataFlow::SourceNode getADispatchedValueSource() {
     result = getADispatchedValueSource(DataFlow::TypeBackTracker::end())
   }
@@ -385,6 +474,20 @@ module Redux {
       not reducer.isTypeTagHandler(_) and
       result = reducer.getASource().(DataFlow::FunctionNode).getParameter(1)
     )
+  }
+
+  /** A call to `bindActionCreators` */
+  private class BindActionCreatorsCall extends API::CallNode {
+    BindActionCreatorsCall() {
+      this = API::moduleImport(["redux", "@reduxjs/toolkit"]).getMember("bindActionCreators").getACall()
+    }
+  }
+
+  /** The return value of a function flowing into `bindActionCreators` is dispatched */
+  private class BindActionDispatchSink extends DispatchedValueSink {
+    BindActionDispatchSink() {
+      this = any(BindActionCreatorsCall c).getParameter(0).getAMember().getReturn().getARhs()
+    }
   }
 
   /**
@@ -404,11 +507,12 @@ module Redux {
       t.start() and
       result = this 
       or
-      exists(API::CallNode bind, string prop |
-        bind = API::moduleImport(["redux", "@reduxjs/toolkit"]).getMember("bindActionCreators").getACall() and
+      exists(BindActionCreatorsCall bind, string prop |
         ref(t.continue()).flowsTo(bind.getParameter(0).getMember(prop).getARhs()) and
         result = bind.getReturn().getMember(prop).getAnImmediateUse()
       ) // TODO: step through mapDispatchToProps etc
+      or
+      ReactRedux::dispatchToPropsStep(ref(t.continue()).getALocalUse(), result)
       or
       exists(DataFlow::TypeTracker t2 |
         result = ref(t2).track(t2, t)
@@ -439,23 +543,37 @@ module Redux {
         outcome = test.getPolarity() and
         result = test.flow()
       )
-      // TODO: manual tests here
+    }
+
+    /**
+     * Holds if `successBlock`  when a check has determined that `action` originated from this action creator.
+     */
+    private ReachableBasicBlock getASuccessfulTypeCheckBlock( DataFlow::SourceNode action) {
+      result = getASuccessfulTypeCheckBlock(action, getTypeTag())
+      or
+      exists(ConditionGuardNode guard, DataFlow::CallNode call |
+        call = ref().getAMethodCall("match") and
+        guard.getTest() = call.asExpr() and
+        action.flowsTo(call.getArgument(0)) and
+        guard.getOutcome() = true and
+        result = guard.getBasicBlock()
+      )
     }
 
     /** Gets a data flow node referring a payload of this action (usually in the reducer function). */
     DataFlow::SourceNode getAPayloadReference() {
       // `if (x.match(action)) { ... action.payload ... }`
-      exists(DataFlow::Node test, boolean outcome, DataFlow::Node action, ConditionGuardNode guard |
-        // Used in: Grafana
-        test = getATypeTest(action, outcome) and
-        result = action.getALocalSource().getAPropertyRead("payload") and
-        guard.getTest() = test.asExpr() and
-        guard.getOutcome() = outcome and
-        guard.dominates(result.getBasicBlock())
+      exists(DataFlow::SourceNode actionSrc |
+        result = actionSrc.getAPropertyRead("payload") and
+        getASuccessfulTypeCheckBlock(actionSrc).dominates(result.getBasicBlock())
       )
       or
       exists(ReducerArg reducer |
-        reducer.isTypeTagHandler(getTypeTag()) and
+        (
+          reducer.isTypeTagHandler(getTypeTag())
+          or
+          reducer.isActionTypeHandler(ref().getALocalUse())
+        ) and
         result = reducer.getASource().(DataFlow::FunctionNode).getParameter(1).getAPropertyRead("payload")
       )
     }
@@ -502,27 +620,120 @@ module Redux {
   }
 
   /**
-   * Step from a typed action creation to its use (usually in a reducer function).
+   * Holds if `pred -> succ` is step an action to its use in a reducer function.
    */
-  // predicate actionToReducerStep(DataFlow::Node input, DataFlow::SourceNode output) {
-  //   exists(ActionCreator action |
-  //     exists(DataFlow::CallNode call | call = action.getADispatchInvocation() |
-  //       exists(int i |
-  //         input = call.getArgument(i) and
-  //         output = action.getMiddlewareFunction().getParameter(i)
-  //       )
-  //       or
-  //       not exists(action.getMiddlewareFunction()) and
-  //       input = call.getArgument(0) and
-  //       output = action.getAPayloadReference()
-  //     )
-  //     or
-  //     input = action.getMiddlewareFunction().getReturnNode() and
-  //     output = action.getAPayloadReference()
-  //   )
-  // }
+  predicate actionToReducerStep(DataFlow::Node pred, DataFlow::SourceNode succ) {
+    // Actions created by an action creator library
+    exists(ActionCreator action |
+      exists(DataFlow::CallNode call | call = action.ref().getACall() |
+        exists(int i |
+          pred = call.getArgument(i) and
+          succ = action.getMiddlewareFunction().getParameter(i)
+        )
+        or
+        not exists(action.getMiddlewareFunction()) and
+        pred = call.getArgument(0) and
+        succ = action.getAPayloadReference()
+      )
+      or
+      pred = action.getMiddlewareFunction().getReturnNode() and
+      succ = action.getAPayloadReference()
+    )
+    or
+    // Manually created and dispatched actions
+    exists(string actionType, string prop, DataFlow::SourceNode actionSrc |
+      pred = getAManuallyDispatchedValue(actionType).getAPropertyWrite(prop).getRhs() and
+      succ = actionSrc.getAPropertyRead(prop)
+    |
+      getASuccessfulTypeCheckBlock(actionSrc, actionType).dominates(succ.getBasicBlock())
+      or
+      exists(ReducerArg reducer |
+        reducer.isTypeTagHandler(actionType) and
+        actionSrc = reducer.getASource().(DataFlow::FunctionNode).getParameter(1)
+      )
+    )
+  }
 
-  // React-redux model
+  private class ActionToReducerStep extends DataFlow::AdditionalFlowStep {
+    ActionToReducerStep() {
+      actionToReducerStep(_, this)
+    }
+
+    override predicate step(DataFlow::Node pred, DataFlow::Node succ) {
+      actionToReducerStep(pred, succ) and succ = this
+    }
+  }
+
+  /**
+   * Holds if `pred -> succ` is a step from the return value of a reducer function to
+   * a corresponding state access.
+   */
+  predicate reducerToStateStep(DataFlow::Node pred, DataFlow::SourceNode succ) {
+    exists(ReducerArg arg, DataFlow::FunctionNode function |
+      function = arg.getASource() and
+      pred = function.getReturnNode() and
+      succ = arg.getAnAffectedStateNode()
+    )
+    or
+    // To avoid a cartesian product between all root state reducers and all root state accesses,
+    // we use a synthetic singleton node as a junction between these. All reducers flow to the synthetic node,
+    // and the synthetic node flows to all uses.
+    pred = rootState() and
+    succ = any(RootStateNode n).getAUse()
+  }
+
+  private class ReducerToStateStep extends DataFlow::AdditionalFlowStep {
+    ReducerToStateStep() {
+      reducerToStateStep(_, this)
+    }
+
+    override predicate step(DataFlow::Node pred, DataFlow::Node succ) {
+      reducerToStateStep(pred, succ) and succ = this
+    }
+  }
+
+  /**
+   * Gets a dispatched object literal with a property `type: actionType`.
+   */
+  private DataFlow::ObjectLiteralNode getAManuallyDispatchedValue(string actionType) {
+    result.getAPropertyWrite("type").getRhs().mayHaveStringValue(actionType) and
+    result = getADispatchedValueSource()
+  }
+
+  /**
+   * Gets the block to be executed after a check has determined that `action.type` is `actionType`.
+   */
+  private ReachableBasicBlock getASuccessfulTypeCheckBlock(DataFlow::SourceNode action, string actionType) {
+    action = getAnUntypedActionInReducer() and
+    (
+      exists(MembershipCandidate candidate, ConditionGuardNode guard |
+        action.getAPropertyRead("type").flowsTo(candidate) and
+        candidate.getAMemberString() = actionType and
+        guard.getTest() = candidate.getTest().asExpr() and
+        guard.getOutcome() = candidate.getTestPolarity() and
+        result = guard.getBasicBlock()
+      )
+      or
+      exists(SwitchStmt switch, SwitchCase case |
+        action.getAPropertyRead("type").flowsTo(switch.getExpr().flow()) and
+        case = switch.getACase() and
+        case.getExpr().mayHaveStringValue(actionType) and
+        result = getCaseBlock(case)
+      )
+    )
+  }
+
+  /** Gets the block to execute with `case` matches sucessfully. */
+  private BasicBlock getCaseBlock(SwitchCase case) {
+    result = case.getBodyStmt(0).getBasicBlock()
+    or
+    not exists(case.getABodyStmt()) and
+    exists(SwitchStmt stmt, int i |
+      stmt.getCase(i) = case and
+      result = getCaseBlock(stmt.getCase(i + 1))
+    )
+  }
+
   private module ReactRedux {
     API::Node useSelector() { result = API::moduleImport("react-redux").getMember("useSelector") }
 
@@ -541,6 +752,13 @@ module Redux {
     /** The argument to a `useSelector` callback, seen as a root state reference. */
     class UseSelectorStateSource extends RootStateNode {
       UseSelectorStateSource() { this = useSelector().getParameter(0).getParameter(0) }
+    }
+
+    /** A call to `useDispatch`, as a source of the `dispatch` function. */
+    private class UseDispatchFunctionSource extends DispatchFunctionSource {
+      UseDispatchFunctionSource() {
+        this = API::moduleImport("react-redux").getMember("useDispatch").getReturn().getAnImmediateUse()
+      }
     }
 
     private class RealConnectFunction extends ConnectCall {
@@ -621,8 +839,7 @@ module Redux {
         // TODO not currently used
         result = getMapDispatchToProps().getMember(name).getARhs()
         or
-        exists(DataFlow::CallNode bind |
-          bind = API::moduleImport("redux").getMember("bindActionCreators").getACall() and
+        exists(BindActionCreatorsCall bind |
           bind.flowsTo(getMapDispatchToProps().getReturn().getARhs()) and
           result = bind.getOptionArgument(0, name)
         )
@@ -636,6 +853,13 @@ module Redux {
             .getAComponentCreatorReference()
             .flowsTo(getAComponentTransformer().getACall().getArgument(0))
       }
+    }
+
+    predicate dispatchToPropsStep(DataFlow::Node pred, DataFlow::Node succ) {
+      exists(ConnectCall call, string member |
+        pred = call.getDispatchPropNode(member) and
+        succ = call.getReactComponent().getAPropRead(member)
+      )
     }
 
     private class ConnectionStep extends DataFlow::AdditionalFlowStep {
@@ -668,15 +892,6 @@ module Redux {
         this = any(ConnectCall c).getMapDispatchToProps().getAMember().getReturn().getARhs()
       }
     }
-    // TODO: contribute step to dispatch flow
-    // private class ReduxToolkitDispatch extends Dispatcher {
-    //   override DataFlow::CallNode getAnAdditionalDispatchInvocation() {
-    //     exists(ConnectCall call, string name |
-    //       ref().flowsTo(call.getDispatchPropNode(name)) and
-    //       result = call.getReactComponent().getAPropRead(name).getACall()
-    //     )
-    //   }
-    // }
   }
 
   module Reselect {
