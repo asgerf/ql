@@ -165,14 +165,19 @@ module Redux {
     }
 
     /**
-     * Gets an API node corresponding to the access path within the state returned by this reducer.
+     * Gets an API node for a state access to which the return value of this reducer should flow into.
      *
-     * Has no result for root reducers; those are special-cased in `getAffectedStateNode`.
+     * Has no result for root state accesses; those are special-cased in `getAffectedStateNode`.
      */
     private API::Node getAnAffectedStateApiNode() {
       exists(DelegatingReducer r |
         this = r.getActionHandlerArg(_) and
         result = r.getUseSite().getAnAffectedStateApiNode()
+        or
+        exists(DataFlow::Node succ |
+          ReactRedux::stateToPropsStep(getAnAffectedStateApiNode().getAUse(), succ) and
+          result.getAnImmediateUse() = succ
+        )
         or
         exists(string prop | this = r.getStateHandlerArg(prop) |
           result = r.getUseSite().getAnAffectedStateApiNode().getMember(prop)
@@ -317,6 +322,18 @@ module Redux {
 
     override DataFlow::Node getAPlainHandlerArg() {
       result = getArgument(1)
+    }
+  }
+
+  private class ImmerProduce extends DataFlow::CallNode, DelegatingReducer {
+    ImmerProduce() {
+      this = API::moduleImport("immer").getACall()
+      or
+      this = API::moduleImport("immer").getMember("produce").getACall()
+    }
+
+    override DataFlow::Node getAPlainHandlerArg() {
+      result = getArgument(0)
     }
   }
 
@@ -855,6 +872,13 @@ module Redux {
       }
     }
 
+    predicate stateToPropsStep(DataFlow::Node pred, DataFlow::Node succ) {
+      exists(ConnectCall call |
+        pred = call.getMapStateToProps().getReturn().getARhs() and
+        succ = call.getReactComponent().getADirectPropsAccess()
+      )
+    }
+
     predicate dispatchToPropsStep(DataFlow::Node pred, DataFlow::Node succ) {
       exists(ConnectCall call, string member |
         pred = call.getDispatchPropNode(member) and
@@ -890,6 +914,12 @@ module Redux {
       MapDispatchToPropsMember() {
         // If `mapDispatchToProps` is an object, each method will have its result dispatched
         this = any(ConnectCall c).getMapDispatchToProps().getAMember().getReturn().getARhs()
+      }
+    }
+
+    private class MapStateToPropsStateSource extends RootStateNode {
+      MapStateToPropsStateSource() {
+        this = any(ConnectCall c).getMapStateToProps().getParameter(0)
       }
     }
   }
