@@ -210,7 +210,7 @@ module Redux {
    * Creation of a reducer function that delegates to one or more other reducer functions.
    *
    * Delegating reducers can delegate specific parts of the state object (`getStateHandlerArg`),
-   * actions of a specific type (`getActionHandlerArg`), or everything (`getPlainHandlerArg`).
+   * actions of a specific type (`getActionHandlerArg`), or everything (`getAPlainHandlerArg`).
    */
   abstract class DelegatingReducer extends DataFlow::SourceNode {
     /**
