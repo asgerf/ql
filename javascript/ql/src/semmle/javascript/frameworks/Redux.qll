@@ -21,23 +21,7 @@ import javascript
 // TODO: handle immer-style `state.foo = foo` assignments in reducer; add steps back to state access paths
 
 module Redux {
-  /**
-   * Gets a node interprocedurally reachable from `source`, where `source` must be known
-   * to have a corresponding use-node in the API graph.
-   *
-   * We use this to maintain a consistent interface based on data-flow nodes, while being
-   * able to reuse the type-tracking done by API graphs in cases where the node is known to
-   * be part of the API graph.
-   */
-  pragma[inline]
-  private DataFlow::SourceNode getAnApiReference(DataFlow::SourceNode source) {
-    exists(API::Node apiNode |
-      apiNode.getAnImmediateUse() = source and
-      result = apiNode.getAUse()
-    )
-  }
-
-  /**
+̋  /**
    * Creation of a redux store, usually via a call to `createStore`.
    */
   class StoreCreation extends DataFlow::SourceNode {
@@ -46,7 +30,13 @@ module Redux {
     StoreCreation() { this = range }
 
     /** Gets a reference to the store. */
-    DataFlow::SourceNode ref() { result = getAnApiReference(this) }
+    DataFlow::SourceNode ref() {
+      // We happen to know that all sources have API nodes, so just reuse the API node type tracking
+      exists(API::Node apiNode |
+        apiNode.getAnImmediateUse() = this and
+        result = apiNode.getAUse()
+      )
+    }
 
     /** Gets the data flow node holding the root reducer for this store. */
     DataFlow::Node getReducerArg() { result = range.getReducerArg() }
@@ -81,12 +71,21 @@ module Redux {
     }
   }
 
+  /**
+   * Gets a store creation in a file transitively imported from `tl`.
+   *
+   * Used for associating certain state accesses with a store, to avoid conflating
+   * states from different projects in the same monorepo.
+   */
   private StoreCreation getAStoreImportedFrom(TopLevel tl) {
     result.getTopLevel() = tl
     or
     result = getAStoreImportedFrom(tl.(Module).getAnImportedModule())
   }
 
+  /**
+   * Gets a store that is considered relevant for root state accesses in `tl`.
+   */
   private StoreCreation getAStoreRelevantFor(TopLevel tl) {
     result = getAStoreImportedFrom(tl)
     or
@@ -1092,7 +1091,7 @@ module Redux {
       name = write.getPropertyNameExpr().getStringValue()
     }
 
-    private Identifier withoutRelevantStore() {
+    Identifier withoutRelevantStore() {
       not exists(getAStoreRelevantFor(result.getTopLevel())) and
       not result.getTopLevel().isExterns() and
       result.getName() = ["state", "action", "mapStateToProps", "mapDispatchToProps"]
