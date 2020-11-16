@@ -21,24 +21,6 @@ import javascript
 // TODO: handle immer-style `state.foo = foo` assignments in reducer; add steps back to state access paths
 
 module Redux {
-  private class ReduxRootStateTag extends DataFlow::CustomNodes::SingletonNodeTag {
-    ReduxRootStateTag() { this = "redux-root-state" }
-  }
-
-  private class ReduxRootStateNode extends DataFlow::CustomNodes::SingletonNode,
-    DataFlow::SourceNode::Range {
-    override ReduxRootStateTag tag;
-  }
-
-  private ReduxRootStateNode rootState() { any() }
-
-  /** An API node referring to the root state. */
-  abstract private class RootStateNode extends API::Node { }
-
-  /** Gets an API node corresponding to an access of `prop` on the root state. */
-  pragma[noinline]
-  private API::Node rootStateProp(string prop) { result = any(RootStateNode n).getMember(prop) }
-
   /**
    * Gets a node interprocedurally reachable from `source`, where `source` must be known
    * to have a corresponding use-node in the API graph.
@@ -97,6 +79,40 @@ module Redux {
         result = getParameter(0).getMember("reducer").getARhs()
       }
     }
+  }
+
+  private StoreCreation getAStoreImportedFrom(TopLevel tl) {
+    result.getTopLevel() = tl
+    or
+    result = getAStoreImportedFrom(tl.(Module).getAnImportedModule())
+  }
+
+  private StoreCreation getAStoreRelevantFor(TopLevel tl) {
+    result = getAStoreImportedFrom(tl)
+    or
+    exists(Module m |
+      m.getAnImportedModule() = tl and
+      result = getAStoreRelevantFor(m)
+    )
+  }
+
+  /** An API node referring to the root state. */
+  abstract private class RootStateNode extends API::Node { }
+
+  /** Gets an API node corresponding to an access of `prop` on the root state of `store`. */
+  pragma[noinline]
+  private API::Node rootStatePropRaw(string prop, StoreCreation store) {
+    result = any(RootStateNode n).getMember(prop) and
+    store = getAStoreRelevantFor([result.getAnImmediateUse().getTopLevel(), result.getARhs().getTopLevel()])
+  }
+
+  /**
+   * Gets an API node corresponding to an access of `prop` on the root state of some store
+   * that is relevant at `useSite`.
+   */
+  pragma[inline]
+  private API::Node rootStatePropFrom(string prop, TopLevel useSite) {
+    result = rootStatePropRaw(prop, getAStoreRelevantFor(useSite))
   }
 
   /** A data flow node that is used as a reducer. */
@@ -169,40 +185,6 @@ module Redux {
         this = r.getActionHandlerArg(_) and
         r.getUseSite().isRootStateHandler()
       )
-    }
-
-    /**
-     * Gets an API node for a state access to which the return value of this reducer should flow.
-     *
-     * Has no result for root state accesses; those are special-cased in `getAffectedStateNode`.
-     */
-    private API::Node getAnAffectedStateApiNode() {
-      exists(DelegatingReducer r |
-        this = r.getActionHandlerArg(_) and
-        result = r.getUseSite().getAnAffectedStateApiNode()
-        or
-        exists(DataFlow::Node succ |
-          ReactRedux::stateToPropsStep(getAnAffectedStateApiNode().getAUse(), succ) and
-          result.getAnImmediateUse() = succ
-        )
-        or
-        exists(string prop | this = r.getStateHandlerArg(prop) |
-          result = r.getUseSite().getAnAffectedStateApiNode().getMember(prop)
-          or
-          r.getUseSite().isRootStateHandler() and
-          result = rootStateProp(prop)
-        )
-      )
-    }
-
-    /**
-     * Gets a state access affected by the return value of this reducer.
-     */
-    DataFlow::SourceNode getAnAffectedStateNode() {
-      result = getAnAffectedStateApiNode().getAnImmediateUse()
-      or
-      isRootStateHandler() and
-      result = rootState()
     }
   }
 
@@ -742,22 +724,48 @@ module Redux {
     }
   }
 
+  /** Gets the API node for a non-root state access affected by `reducer`'s return value. */
+  private API::Node getAnAffectedStateAccess(ReducerArg reducer) {
+    exists(DelegatingReducer r |
+      exists(string prop | reducer = r.getStateHandlerArg(prop) |
+        result = getAnAffectedStateAccess(r.getUseSite()).getMember(prop)
+        or
+        r.getUseSite().isRootStateHandler() and
+        result = rootStatePropFrom(prop, reducer.getTopLevel())
+      )
+      or
+      reducer = r.getActionHandlerArg(_) and
+      result = getAnAffectedStateAccess(r.getUseSite())
+      or
+      exists(DataFlow::Node succ |
+        ReactRedux::stateToPropsStep(getAnAffectedStateAccess(reducer).getAUse(), succ) and
+        result.getAnImmediateUse() = succ
+      )
+    )
+  }
+
+  /** Gets the API node for a non-root state access into which `pred` flows from a reducer function. */
+  private API::Node getAStateAccessSuccessor(DataFlow::Node pred) {
+    exists(ReducerArg reducer, DataFlow::FunctionNode function |
+      function = reducer.getASource()
+    |
+      pred = function.getReturnNode() and
+      result = getAnAffectedStateAccess(reducer)
+      or
+      reducer.isRootStateHandler() and
+      exists(string prop |
+        pred = function.getReturnNode().getALocalSource().getAPropertyWrite(prop).getRhs() and
+        result = rootStatePropFrom(prop, reducer.getTopLevel())
+      )
+    )
+  }
+
   /**
    * Holds if `pred -> succ` is a step from the return value of a reducer function to
    * a corresponding state access.
    */
   predicate reducerToStateStep(DataFlow::Node pred, DataFlow::SourceNode succ) {
-    exists(ReducerArg arg, DataFlow::FunctionNode function |
-      function = arg.getASource() and
-      pred = function.getReturnNode() and
-      succ = arg.getAnAffectedStateNode()
-    )
-    or
-    // To avoid a cartesian product between all root state reducers and all root state accesses,
-    // we use a synthetic singleton node as a junction between these. All reducers flow to the synthetic node,
-    // and the synthetic node flows to all uses.
-    pred = rootState() and
-    succ = any(RootStateNode n).getAUse()
+    succ = getAStateAccessSuccessor(pred).getAnImmediateUse()
   }
 
   private class ReducerToStateStep extends DataFlow::AdditionalFlowStep {
@@ -1082,6 +1090,12 @@ module Redux {
 
     predicate test(DataFlow::PropWrite write, string name) {
       name = write.getPropertyNameExpr().getStringValue()
+    }
+
+    private Identifier withoutRelevantStore() {
+      not exists(getAStoreRelevantFor(result.getTopLevel())) and
+      not result.getTopLevel().isExterns() and
+      result.getName() = ["state", "action", "mapStateToProps", "mapDispatchToProps"]
     }
   }
 }
