@@ -46,8 +46,17 @@ module ExternalAPIUsedWithUntrustedData {
    * A package name whose entire API is considered "safe" for the purpose of this query.
    */
   abstract class SafeExternalAPIPackage extends string {
-    bindingset[this]
-    SafeExternalAPIPackage() { any() }
+    SafeExternalAPIPackage() { exists(API::moduleImport(this)) }
+  }
+
+  private class DefaultSafeExternalAPIPackage extends SafeExternalAPIPackage {
+    DefaultSafeExternalAPIPackage() {
+      // Exclude a few generic toolbelt libraries that are too noisy for this query
+      this = "bluebird" or
+      this = ["lodash", "lodash-es"] + any(string s) or
+      this = "underscore" or
+      this = "ramda"
+    }
   }
 
   /**
@@ -141,8 +150,13 @@ module ExternalAPIUsedWithUntrustedData {
     // escapes to a library may themselves escape to that library
     exists(API::Node base | mayEscapeToLibrary(base) and not isDeepObjectSink(base) |
       f = base.getAMember() or
-      f = base.getReturn() or
-      f = base.getPromised()
+      f = base.getPromised() or
+      // Using the return value as a sink can lead to call/return mismatching where
+      // the tainted value comes from a call site other than one that passes the return
+      // value to an external API. This can be quite confusing as the external API is nowhere
+      // to be found along the reported path. To mitigate this issue a bit, only follow return edges
+      // when the function is in the same container as the base.
+      f = base.getReturn()
     )
     or
     // contravariant recursive case: arguments (other than the receiver) passed to a function
@@ -157,28 +171,56 @@ module ExternalAPIUsedWithUntrustedData {
     exists(node.getARhs()) and
     not node instanceof SafeExternalApiNode
     or
-    needsPrettyName(node.getASuccessor())
+    needsPrettyName(node.getASuccessor()) and
+    not node = API::moduleImport(any(SafeExternalAPIPackage p))
+  }
+
+  int sinkDistance(API::Node node) {
+    needsPrettyName(node) and
+    mayEscapeToLibrary(node) and
+    result = min(API::Node base | node = base.getAParameter() | base.getDepth())
+  }
+
+  predicate isRelevantParameter(API::Node node) {
+    exists(sinkDistance(node))
+  }
+
+  private predicate edge(API::Node pred, API::Node succ) {
+    succ = pred.getASuccessor()
+  }
+
+  int distanceToParam(API::Node param, API::Node node) = shortestDistances(isRelevantParameter/1, edge/2)(param, node, result)
+
+  int getDepth(API::Node node, boolean isSink) {
+    isSink = true and
+    result = min(API::Node param || distanceToParam(param, node) + param.getDepth())
+    or
+    isSink = false and
+    result = node.getDepth()
   }
 
   /**
    * Gets a human-readable description of the access path leading to `node`.
+   *
+   * `isSink` is bound to true if this value flows into the library, or false if
+   * it flows out of the library. This is needed to ensure that the final name for
+   * a sink actually mentions a parameter.
    */
-  private string getPrettyName(API::Node node) {
+  private string getPrettyName(API::Node node, boolean isSink, int baseDepth) {
     needsPrettyName(node) and
     (
       exists(string mod |
         node = API::moduleImport(mod) and
-        result = mod
+        result = mod and
+        isSink = false and
+        baseDepth = 0
       )
       or
-      exists(API::Node base, string basename |
-        basename = getPrettyName(base) and base.getDepth() < node.getDepth()
-      |
+      exists(API::Node base | base.getDepth() < node.getDepth() |
         // In practice there is no need to distinguish between 'new X' and 'X()'
         node = [base.getInstance(), base.getReturn()] and
-        result = basename + "()"
+        result = getPrettyName(base, isSink, baseDepth) + "()"
         or
-        mayEscapeToLibrary(base) and
         exists(string member |
           node = base.getMember(member) and
           not node = base.getUnknownMember() and
@@ -186,27 +228,38 @@ module ExternalAPIUsedWithUntrustedData {
           not (member = "default" and base = API::moduleImport(_))
         |
           if member.regexpMatch("[a-zA-Z_$]\\w*")
-          then result = basename + "." + member
-          else result = basename + "['" + member.regexpReplaceAll("'", "\\'") + "']"
+          then result = getPrettyName(base, isSink, baseDepth) + "." + member
+          else result = getPrettyName(base, isSink, baseDepth) + "['" + member.regexpReplaceAll("'", "\\'") + "']"
         )
         or
-        mayEscapeToLibrary(base) and
         (
           node = base.getUnknownMember() or
           node = base.getMember(any(string s | isNumericString(s)))
         ) and
-        result = basename + "[]"
-        or
-        exists(string index |
-          // `getParameter(i)` requires a binding set for i, so use the raw label to get its value
-          node = base.getASuccessor("parameter " + index) and
-          index != "-1" and // ignore receiver
-          result = basename + ".[param " + index + "]"
-        )
+        result = getPrettyName(base, isSink, baseDepth) + "[]"
         or
         // just collapse promises
         node = base.getPromised() and
-        result = basename
+        result = getPrettyName(base, isSink, baseDepth)
+      )
+      or
+      exists(API::Node base, string index, int oldBaseDepth |
+        // `getParameter(i)` requires a binding set for i, so use the raw label to get its value
+        node = base.getASuccessor("parameter " + index) and
+        index != "-1" and // ignore receiver
+        result = getPrettyName(base, isSink.booleanNot(), oldBaseDepth) + ".[param " + index + "]" and
+        (
+          // When switching from non-sink to sink we relax the depth check since the shortest path to the root
+          // might not be a path that proves this is a sink (i.e. a path with an even number of parameter edges).
+          // Bump the `baseDepth` upwards and check that it grows to ensure termination.
+          isSink = true and
+          baseDepth = base.getDepth() and
+          oldBaseDepth < baseDepth
+          or
+          isSink = false and
+          baseDepth = oldBaseDepth and
+          base.getDepth() < node.getDepth()
+        )
       )
     )
   }
@@ -226,16 +279,10 @@ module ExternalAPIUsedWithUntrustedData {
    * ```
    */
   private predicate mayEscapeToLibraryNotSubsumedByTaintSteps(API::Node f) {
-    // covariant recursive case: members, results, and promise contents of something that
-    // escapes to a library may themselves escape to that library
     exists(API::Node base | mayEscapeToLibrary(base) |
       f = base.getAMember() and not f = base.getUnknownMember()
-      or
-      f = base.getReturn()
     )
     or
-    // contravariant recursive case: arguments (other than the receiver) passed to a function
-    // that comes from a library may escape to that library
     exists(API::Node base | mayComeFromLibrary(base) |
       f = base.getAParameter() and not f = base.getReceiver()
     )
@@ -254,6 +301,6 @@ module ExternalAPIUsedWithUntrustedData {
             .getAnArgument()
     }
 
-    override string getApiName() { result = getPrettyName(api) }
+    override string getApiName() { result = getPrettyName(api, true, _) }
   }
 }
