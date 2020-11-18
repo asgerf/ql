@@ -129,19 +129,17 @@ module Redux {
       t.start() and
       result = getALocalSource()
       or
-      exists(DataFlow::Node mid | result.flowsTo(mid) |
-        // Step through forwarding functions
-        DataFlow::functionForwardingStep(mid, getASource(t.continue()))
-        or
-        // Step through library functions like `redux-persist`
-        mid = getASource(t.continue()).(DelegatingReducer).getAPlainHandlerArg()
-        or
-        // Step through function composition (usually composed with various state "enhancer" functions)
-        exists(FunctionCompositionCall compose, DataFlow::CallNode call |
-          call = compose.getACall() and
-          getASource(t.continue()) = call and
-          mid = [compose.getAnOperandNode(), call.getAnArgument()]
-        )
+      // Step through forwarding functions
+      DataFlow::functionForwardingStep(result.getALocalUse(), getASource(t.continue()))
+      or
+      // Step through library functions like `redux-persist`
+      result.getALocalUse() = getASource(t.continue()).(DelegatingReducer).getAPlainHandlerArg()
+      or
+      // Step through function composition (usually composed with various state "enhancer" functions)
+      exists(FunctionCompositionCall compose, DataFlow::CallNode call |
+        getASource(t.continue()) = call and
+        call = compose.getACall() and
+        result.getALocalUse() = [compose.getAnOperandNode(), call.getAnArgument()]
       )
       or
       exists(DataFlow::TypeBackTracker t2 | result = getASource(t2).backtrack(t2, t))
