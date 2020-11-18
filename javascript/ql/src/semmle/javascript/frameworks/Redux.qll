@@ -21,7 +21,7 @@ import javascript
 // TODO: handle immer-style `state.foo = foo` assignments in reducer; add steps back to state access paths
 
 module Redux {
-̋  /**
+  /**
    * Creation of a redux store, usually via a call to `createStore`.
    */
   class StoreCreation extends DataFlow::SourceNode {
