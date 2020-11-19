@@ -22,6 +22,48 @@ private import semmle.javascript.Unit
 // TODO: handle immer-style `state.foo = foo` assignments in reducer; add steps back to state access paths
 module Redux {
   /**
+   * To avoid mixing up the state between independent Redux apps that live in a monorepo,
+   * we do a heuristic program slicing based on `package.json` files. For most projects this has no effect.
+   */
+  private module ProgramSlicing {
+    /** Gets the innermost `package.json` file in a directory containing the given file. */
+    private PackageJSON getPackageJson(Container f) {
+      f = result.getFile().getParentContainer()
+      or
+      not exists(f.getFile("package.json")) and
+      result = getPackageJson(f.getParentContainer())
+    }
+
+    private predicate packageDependsOn(PackageJSON importer, PackageJSON dependency) {
+      entryPointPackage().getADependenciesObject("").getADependency(dependency.getPackageName(), _)
+    }
+
+    /** A package that can be considered an entry point for a Redux app. */
+    private PackageJSON entryPointPackage() {
+      result = getPackageJson(any(StoreCreation c).getFile())
+      or
+      // Any package that imports a store-creating package is considered a potential entry point.
+      packageDependsOn(result, entryPointPackage())
+    }
+
+    pragma[nomagic]
+    private predicate arePackagesInSameReduxApp(PackageJSON a, PackageJSON b) {
+      exists(PackageJSON entry |
+        entry = entryPointPackage() and
+        packageDependsOn*(entry, a) and
+        packageDependsOn*(entry, b)
+      )
+    }
+
+    pragma[inline]
+    private predicate areFilesInSameReduxApp(File a, File b) {
+      not exists(PackageJSON pkg)
+      or
+      arePackagesInSameReduxApp(getPackageJson(a), getPackageJson(b))
+    }
+  }
+
+  /**
    * Creation of a redux store, usually via a call to `createStore`.
    */
   class StoreCreation extends DataFlow::SourceNode {
@@ -73,50 +115,19 @@ module Redux {
     }
   }
 
-  /**
-   * Gets a store creation in a file transitively imported from `tl`.
-   *
-   * Used for associating certain state accesses with a store, to avoid conflating
-   * states from different projects in the same monorepo.
-   */
-  private StoreCreation getAStoreImportedFrom(TopLevel tl) {
-    result.getTopLevel() = tl
-    or
-    result = getAStoreImportedFrom(tl.(Module).getAnImportedModule())
-  }
+  /** An API node that is a source of the Redux root state. */
+  private abstract class RootStateSource extends API::Node { }
 
-  /**
-   * Gets a store that is considered relevant for root state accesses in `tl`.
-   */
-  private StoreCreation getAStoreRelevantFor(TopLevel tl) {
-    result = getAStoreImportedFrom(tl)
-    or
-    exists(Module m |
-      m.getAnImportedModule() = tl and
-      result = getAStoreRelevantFor(m)
-    )
-  }
-
-  /** An API node referring to the root state. */
-  abstract private class RootStateNode extends API::Node { }
-
+  /** Gets an API node referring to the Redux root state. */
   private API::Node rootState() {
-    result instanceof RootStateNode
+    result instanceof RootStateSource
     or
     stateStep(rootState().getAUse(), result.getAnImmediateUse())
   }
 
   /**
-   * Combines two access paths, while disallowing unbounded growth of access paths.
+   * Gets an API node referring to the given (non-empty) access path within the Redux state.
    */
-  bindingset[base, prop]
-  private string joinAccessPaths(string base, string prop) {
-    result = base + "." + prop and
-    // Allow at most two occurrences of a given property name in the path
-    // (one in the base, plus the one we're appending now).
-    count(base.indexOf("." + prop + ".")) <= 1
-  }
-
   private API::Node rootStateAccessPath(string accessPath) {
     result = rootState().getMember(accessPath)
     or
@@ -128,23 +139,15 @@ module Redux {
     stateStep(rootStateAccessPath(accessPath).getAUse(), result.getAnImmediateUse())
   }
 
-  /** Gets an API node corresponding to an access of `prop` on the root state of `store`. */
-  pragma[noinline]
-  private API::Node rootStatePropRaw(string prop, StoreCreation store) {
-    result = any(RootStateNode n).getMember(prop) and
-    store =
-      getAStoreRelevantFor([
-          result.getAnImmediateUse().getTopLevel(), result.getARhs().getTopLevel()
-        ])
-  }
-
   /**
-   * Gets an API node corresponding to an access of `prop` on the root state of some store
-   * that is relevant at `useSite`.
+   * Combines two state access paths, while disallowing unbounded growth of access paths.
    */
-  pragma[inline]
-  private API::Node rootStatePropFrom(string prop, TopLevel useSite) {
-    result = rootStatePropRaw(prop, getAStoreRelevantFor(useSite))
+  bindingset[base, prop]
+  private string joinAccessPaths(string base, string prop) {
+    result = base + "." + prop and
+    // Allow at most two occurrences of a given property name in the path
+    // (one in the base, plus the one we're appending now).
+    count(base.indexOf("." + prop + ".")) <= 1
   }
 
   /** A data flow node that is used as a reducer. */
@@ -743,6 +746,7 @@ module Redux {
     }
   }
 
+  /** Gets the access path which `reducer` operates on. */
   private string getAffectedStateAccessPath(ReducerArg reducer) {
     exists(DelegatingReducer r |
       exists(string prop | reducer = r.getStateHandlerArg(prop) |
@@ -757,8 +761,17 @@ module Redux {
     )
   }
 
+  /**
+   * Holds if `pred -> succ` should be a step from a reducer to a state access affected by the reducer.
+   */
+  predicate reducerToStateStep(DataFlow::Node pred, DataFlow::Node succ) {
+    reducerToStateStepAux(pred, succ) and
+    areFilesInSameReduxApp(pred.getFile(), succ.getFile())
+  }
+
+  /** The step relation for `reducerToStateStep` without the program-slicing check. */
   pragma[nomagic]
-  private predicate reducerToStep2(DataFlow::Node pred, DataFlow::SourceNode succ) {
+  private predicate reducerToStateStepAux(DataFlow::Node pred, DataFlow::SourceNode succ) {
     exists(ReducerArg reducer, DataFlow::FunctionNode function, string accessPath |
       function = reducer.getASource() and
       accessPath = getAffectedStateAccessPath(reducer)
@@ -780,77 +793,6 @@ module Redux {
       pred = AccessPath::getAnAssignmentTo(base, suffix) and
       succ = rootStateAccessPath(suffix).getAnImmediateUse()
     )
-  }
-
-  predicate reducerToStep3(DataFlow::Node pred, DataFlow::Node succ) {
-    reducerToStep2(pred, succ) and
-    getAStoreRelevantFor(pred.getTopLevel()) = getAStoreRelevantFor(succ.getTopLevel())
-  }
-
-  /** Gets the API node for a non-root state access affected by `reducer`'s return value. */
-  private API::Node getAnAffectedStateAccess(ReducerArg reducer) {
-    exists(DelegatingReducer r |
-      exists(string prop | reducer = r.getStateHandlerArg(prop) |
-        result = getAnAffectedStateAccess(r.getUseSite()).getMember(prop)
-        or
-        r.getUseSite().isRootStateHandler() and
-        result = rootStatePropFrom(prop, reducer.getTopLevel())
-      )
-      or
-      reducer = r.getActionHandlerArg(_) and
-      result = getAnAffectedStateAccess(r.getUseSite())
-    )
-    or
-    exists(DataFlow::Node succ |
-      stateStep(getAnAffectedStateAccess(reducer).getAUse(), succ) and
-      result.getAnImmediateUse() = succ
-    )
-  }
-
-  /** Gets the API node for a non-root state access into which `pred` flows from a reducer function. */
-  private DataFlow::SourceNode getAStateAccessSuccessor(DataFlow::Node pred) {
-    exists(ReducerArg reducer, DataFlow::FunctionNode function | function = reducer.getASource() |
-      // Reducers that operate on some access path within the state
-      pred = function.getReturnNode() and
-      result = getAnAffectedStateAccess(reducer).getAnImmediateUse()
-      or
-      // Flow from some returned access path to a state access with the same access path.
-      // With the 'immer' library, the new state can be returned or created by mutating the 'state' argument,
-      // so use either the 'state' argument or the return value as the base for an access path.
-      exists(DataFlow::SourceNode base, string accessPath |
-        base = [function.getParameter(0), function.getReturnNode().getALocalSource()] and
-        pred = AccessPath::getAnAssignmentTo(base, accessPath) and
-        result = AccessPath::getAReferenceTo(getAnAffectedStateAccess(reducer).getAnImmediateUse(), accessPath)
-      )
-      or
-      // For root reducers, add edge from `x` in `return {x}` to `state.x`.
-      // Mapping root state to all root state accesses can generate N^2 edges, and in practice the state
-      // is always an object anyway.
-      reducer.isRootStateHandler() and
-      exists(string prop |
-        pred = function.getReturnNode().getALocalSource().getAPropertyWrite(prop).getRhs() and
-        result = rootStatePropFrom(prop, reducer.getTopLevel()).getAnImmediateUse()
-      )
-    )
-  }
-
-  predicate directStateAssignment(DataFlow::Node rhs, string accessPath) {
-    exists(ReducerArg reducer, DataFlow::FunctionNode function | function = reducer.getASource() |
-      rhs = AccessPath::getAnAssignmentTo(function.getParameter(0), accessPath)
-    )
-  }
-
-  predicate importResolver(Import imprt, Module mod) {
-    imprt.getImportedPath().getValue().regexpMatch("@.*") and
-    mod = imprt.getImportedModule()
-  }
-
-  /**
-   * Holds if `pred -> succ` is a step from the return value of a reducer function to
-   * a corresponding state access.
-   */
-  predicate reducerToStateStep(DataFlow::Node pred, DataFlow::SourceNode succ) {
-    succ = getAStateAccessSuccessor(pred)
   }
 
   private class ReducerToStateStep extends DataFlow::AdditionalFlowStep {
@@ -944,7 +886,7 @@ module Redux {
     }
 
     /** The argument to a `useSelector` callback, seen as a root state reference. */
-    class UseSelectorStateSource extends RootStateNode {
+    class UseSelectorStateSource extends RootStateSource {
       UseSelectorStateSource() { this = useSelector().getParameter(0).getParameter(0) }
     }
 
@@ -1098,7 +1040,7 @@ module Redux {
     }
 
     /** The first argument to `mapStateToProps` as an access to the root state. */
-    private class MapStateToPropsStateSource extends RootStateNode {
+    private class MapStateToPropsStateSource extends RootStateSource {
       MapStateToPropsStateSource() {
         this = any(ConnectCall c).getMapStateToProps().getParameter(0)
       }
@@ -1150,7 +1092,7 @@ module Redux {
     }
 
     /** The state argument to a selector */
-    private class SelectorStateArg extends RootStateNode {
+    private class SelectorStateArg extends RootStateSource {
       SelectorStateArg() { this = any(CreateSelectorCall c).getSelectorFunction(_).getParameter(0) }
     }
 
@@ -1212,10 +1154,10 @@ module Redux {
       name = write.getPropertyNameExpr().getStringValue()
     }
 
-    Identifier withoutRelevantStore() {
-      not exists(getAStoreRelevantFor(result.getTopLevel())) and
-      not result.getTopLevel().isExterns() and
-      result.getName() = ["state", "action", "mapStateToProps", "mapDispatchToProps"]
-    }
+    // Identifier withoutRelevantStore() {
+    //   not exists(getAStoreRelevantFor(result.getTopLevel())) and
+    //   not result.getTopLevel().isExterns() and
+    //   result.getName() = ["state", "action", "mapStateToProps", "mapDispatchToProps"]
+    // }
   }
 }
