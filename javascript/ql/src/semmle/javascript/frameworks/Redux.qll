@@ -3,6 +3,8 @@
  */
 
 import javascript
+private import semmle.javascript.dataflow.internal.PreCallGraphStep
+private import semmle.javascript.Unit
 
 // The core Redux model contributes two kinds of steps:
 //   1. From dispatch argument to reducer parameter ("dispatch step")
@@ -97,6 +99,34 @@ module Redux {
 
   /** An API node referring to the root state. */
   abstract private class RootStateNode extends API::Node { }
+
+  private API::Node rootState() {
+    result instanceof RootStateNode
+    or
+    stateStep(rootState().getAUse(), result.getAnImmediateUse())
+  }
+
+  /**
+   * Combines two access paths, while disallowing unbounded growth of access paths.
+   */
+  bindingset[base, prop]
+  private string joinAccessPaths(string base, string prop) {
+    result = base + "." + prop and
+    // Allow at most two occurrences of a given property name in the path
+    // (one in the base, plus the one we're appending now).
+    count(base.indexOf("." + prop + ".")) <= 1
+  }
+
+  private API::Node rootStateAccessPath(string accessPath) {
+    result = rootState().getMember(accessPath)
+    or
+    exists(string base, string prop |
+      result = rootStateAccessPath(base).getMember(prop) and
+      accessPath = joinAccessPaths(base, prop)
+    )
+    or
+    stateStep(rootStateAccessPath(accessPath).getAUse(), result.getAnImmediateUse())
+  }
 
   /** Gets an API node corresponding to an access of `prop` on the root state of `store`. */
   pragma[noinline]
@@ -713,6 +743,50 @@ module Redux {
     }
   }
 
+  private string getAffectedStateAccessPath(ReducerArg reducer) {
+    exists(DelegatingReducer r |
+      exists(string prop | reducer = r.getStateHandlerArg(prop) |
+        result = joinAccessPaths(getAffectedStateAccessPath(r.getUseSite()), prop)
+        or
+        r.getUseSite().isRootStateHandler() and
+        result = prop
+      )
+      or
+      reducer = r.getActionHandlerArg(_) and
+      result = getAffectedStateAccessPath(r.getUseSite())
+    )
+  }
+
+  pragma[nomagic]
+  private predicate reducerToStep2(DataFlow::Node pred, DataFlow::SourceNode succ) {
+    exists(ReducerArg reducer, DataFlow::FunctionNode function, string accessPath |
+      function = reducer.getASource() and
+      accessPath = getAffectedStateAccessPath(reducer)
+    |
+      pred = function.getReturnNode() and
+      succ = rootStateAccessPath(accessPath).getAnImmediateUse()
+      or
+      exists(string suffix, DataFlow::SourceNode base |
+        base = [function.getParameter(0), function.getReturnNode().getALocalSource()] and
+        pred = AccessPath::getAnAssignmentTo(base, suffix) and
+        succ = rootStateAccessPath(accessPath + "." + suffix).getAnImmediateUse()
+      )
+    )
+    or
+    exists(ReducerArg reducer, DataFlow::FunctionNode function, string suffix, DataFlow::SourceNode base |
+      function = reducer.getASource() and
+      reducer.isRootStateHandler() and
+      base = [function.getParameter(0), function.getReturnNode().getALocalSource()] and
+      pred = AccessPath::getAnAssignmentTo(base, suffix) and
+      succ = rootStateAccessPath(suffix).getAnImmediateUse()
+    )
+  }
+
+  predicate reducerToStep3(DataFlow::Node pred, DataFlow::Node succ) {
+    reducerToStep2(pred, succ) and
+    getAStoreRelevantFor(pred.getTopLevel()) = getAStoreRelevantFor(succ.getTopLevel())
+  }
+
   /** Gets the API node for a non-root state access affected by `reducer`'s return value. */
   private API::Node getAnAffectedStateAccess(ReducerArg reducer) {
     exists(DelegatingReducer r |
@@ -725,26 +799,50 @@ module Redux {
       or
       reducer = r.getActionHandlerArg(_) and
       result = getAnAffectedStateAccess(r.getUseSite())
-      or
-      exists(DataFlow::Node succ |
-        ReactRedux::stateToPropsStep(getAnAffectedStateAccess(reducer).getAUse(), succ) and
-        result.getAnImmediateUse() = succ
-      )
+    )
+    or
+    exists(DataFlow::Node succ |
+      stateStep(getAnAffectedStateAccess(reducer).getAUse(), succ) and
+      result.getAnImmediateUse() = succ
     )
   }
 
   /** Gets the API node for a non-root state access into which `pred` flows from a reducer function. */
-  private API::Node getAStateAccessSuccessor(DataFlow::Node pred) {
+  private DataFlow::SourceNode getAStateAccessSuccessor(DataFlow::Node pred) {
     exists(ReducerArg reducer, DataFlow::FunctionNode function | function = reducer.getASource() |
+      // Reducers that operate on some access path within the state
       pred = function.getReturnNode() and
-      result = getAnAffectedStateAccess(reducer)
+      result = getAnAffectedStateAccess(reducer).getAnImmediateUse()
       or
+      // Flow from some returned access path to a state access with the same access path.
+      // With the 'immer' library, the new state can be returned or created by mutating the 'state' argument,
+      // so use either the 'state' argument or the return value as the base for an access path.
+      exists(DataFlow::SourceNode base, string accessPath |
+        base = [function.getParameter(0), function.getReturnNode().getALocalSource()] and
+        pred = AccessPath::getAnAssignmentTo(base, accessPath) and
+        result = AccessPath::getAReferenceTo(getAnAffectedStateAccess(reducer).getAnImmediateUse(), accessPath)
+      )
+      or
+      // For root reducers, add edge from `x` in `return {x}` to `state.x`.
+      // Mapping root state to all root state accesses can generate N^2 edges, and in practice the state
+      // is always an object anyway.
       reducer.isRootStateHandler() and
       exists(string prop |
         pred = function.getReturnNode().getALocalSource().getAPropertyWrite(prop).getRhs() and
-        result = rootStatePropFrom(prop, reducer.getTopLevel())
+        result = rootStatePropFrom(prop, reducer.getTopLevel()).getAnImmediateUse()
       )
     )
+  }
+
+  predicate directStateAssignment(DataFlow::Node rhs, string accessPath) {
+    exists(ReducerArg reducer, DataFlow::FunctionNode function | function = reducer.getASource() |
+      rhs = AccessPath::getAnAssignmentTo(function.getParameter(0), accessPath)
+    )
+  }
+
+  predicate importResolver(Import imprt, Module mod) {
+    imprt.getImportedPath().getValue().regexpMatch("@.*") and
+    mod = imprt.getImportedModule()
   }
 
   /**
@@ -752,7 +850,7 @@ module Redux {
    * a corresponding state access.
    */
   predicate reducerToStateStep(DataFlow::Node pred, DataFlow::SourceNode succ) {
-    succ = getAStateAccessSuccessor(pred).getAnImmediateUse()
+    succ = getAStateAccessSuccessor(pred)
   }
 
   private class ReducerToStateStep extends DataFlow::AdditionalFlowStep {
@@ -807,18 +905,41 @@ module Redux {
     )
   }
 
+  /**
+   * Defines a flow step to be used for propagating tracking access to `state`.
+   *
+   * An `AdditionalFlowStep` is generated for these steps as well.
+   * It is distinct from `AdditionalFlowStep` to avoid recursion between that and the propagation of `state`.
+   */
+  private class StateStep extends Unit {
+    abstract predicate step(DataFlow::Node pred, DataFlow::Node succ);
+  }
+
+  private predicate stateStep(DataFlow::Node pred, DataFlow::Node succ) {
+    any(StateStep s).step(pred, succ)
+  }
+
+  private class StateStepAsFlowStep extends DataFlow::AdditionalFlowStep {
+    StateStepAsFlowStep() { stateStep(_, this) }
+
+    override predicate step(DataFlow::Node pred, DataFlow::Node succ) {
+      stateStep(pred, succ) and succ = this
+    }
+  }
+
   private module ReactRedux {
     API::Node useSelector() { result = API::moduleImport("react-redux").getMember("useSelector") }
 
     /**
      * Step out of a `useSelector` call, such as from `state.x` to the result of `useSelector(state => state.x)`.
      */
-    class UseSelectorStep extends API::CallNode, DataFlow::AdditionalFlowStep {
-      UseSelectorStep() { this = useSelector().getACall() }
-
+    class UseSelectorStep extends StateStep {
       override predicate step(DataFlow::Node pred, DataFlow::Node succ) {
-        pred = getParameter(0).getReturn().getARhs() and
-        succ = this
+        exists(API::CallNode call |
+          call = useSelector().getACall() and
+          pred = call.getParameter(0).getReturn().getARhs() and
+          succ = call
+        )
       }
     }
 
@@ -941,14 +1062,15 @@ module Redux {
     }
 
     /**
-     * Holds if `pred -> succ` is a step from the return value of `mapStateToProps` to
-     * a `props` access.
+     * A step from the return value of `mapStateToProps` to a `props` access.
      */
-    predicate stateToPropsStep(DataFlow::Node pred, DataFlow::Node succ) {
-      exists(ConnectCall call |
-        pred = call.getMapStateToProps().getReturn().getARhs() and
-        succ = call.getReactComponent().getADirectPropsAccess()
-      )
+    private class StateToPropsStep extends StateStep {
+      override predicate step(DataFlow::Node pred, DataFlow::Node succ) {
+        exists(ConnectCall call |
+          pred = call.getMapStateToProps().getReturn().getARhs() and
+          succ = call.getReactComponent().getADirectPropsAccess()
+        )
+      }
     }
 
     /**
@@ -961,37 +1083,52 @@ module Redux {
       )
     }
 
-    private class ConnectionStep extends DataFlow::AdditionalFlowStep {
-      ConnectionStep() { stateToPropsStep(_, this) }
-
-      override predicate step(DataFlow::Node pred, DataFlow::Node succ) {
-        stateToPropsStep(pred, succ) and succ = this
-      }
-    }
-
+    /** The first argument to `mapDispatchToProps` as a source of the `dispatch` function */
     private class MapDispatchToPropsArg extends DispatchFunctionSource {
       MapDispatchToPropsArg() {
-        // If `mapDispatchToProps` is a function, its first argument is `dispatch`
         this = any(ConnectCall c).getMapDispatchToProps().getParameter(0).getAnImmediateUse()
       }
     }
 
+    /** If `mapDispatchToProps` is an object, each method's return value is dispatched. */
     private class MapDispatchToPropsMember extends DispatchedValueSink {
       MapDispatchToPropsMember() {
-        // If `mapDispatchToProps` is an object, each method will have its result dispatched
         this = any(ConnectCall c).getMapDispatchToProps().getAMember().getReturn().getARhs()
       }
     }
 
+    /** The first argument to `mapStateToProps` as an access to the root state. */
     private class MapStateToPropsStateSource extends RootStateNode {
       MapStateToPropsStateSource() {
-        // The first argument of `mapStateToProps` refers to the state
         this = any(ConnectCall c).getMapStateToProps().getParameter(0)
       }
     }
   }
 
   private module Reselect {
+    /**
+     * A call to `createSelector`.
+     *
+     * Such calls have two forms. The single-argument version is simply a memoized function wrapper:
+     *
+     * ```js
+     *   createSelector(state => state.foo)
+     * ```
+     *
+     * If multiple arguments are used, each callback independently maps over the state, and last
+     * callback collects all the intermediate results into the final result:
+     * 
+     * ```js
+     *   creatorSelector(
+     *     state => state.foo,
+     *     state => state.bar,
+     *     ([foo, bar]) => {...}
+     *   )
+     * ```
+     *
+     * Although selectors can work on any data, not just the Redux state, they are in practice only used
+     * with the state.
+     */
     class CreateSelectorCall extends API::CallNode {
       CreateSelectorCall() {
         this =
@@ -1017,27 +1154,21 @@ module Redux {
       SelectorStateArg() { this = any(CreateSelectorCall c).getSelectorFunction(_).getParameter(0) }
     }
 
-    predicate selectorStep(DataFlow::Node pred, DataFlow::Node succ) {
-      // Return value of `i`th callback flows to the `i`th parameter of the last callback.
-      exists(CreateSelectorCall call, int index |
-        call.getNumArgument() > 1 and
-        pred = call.getSelectorFunction(index).getReturn().getARhs() and
-        succ = call.getLastParameter().getParameter(index).getAnImmediateUse()
-      )
-      or
-      // The result of the last callback is the final result
-      exists(CreateSelectorCall call |
-        pred = call.getLastParameter().getReturn().getARhs() and
-        succ = call
-      )
-    }
-
-    class SelectorStep extends DataFlow::AdditionalFlowStep {
-      SelectorStep() { selectorStep(_, this) }
-
+    /** A flow step between the callbacks of `createSelector` or out of its final selector. */
+    private class CreateSelectorStep extends StateStep {
       override predicate step(DataFlow::Node pred, DataFlow::Node succ) {
-        selectorStep(pred, succ) and
-        this = succ
+        // Return value of `i`th callback flows to the `i`th parameter of the last callback.
+        exists(CreateSelectorCall call, int index |
+          call.getNumArgument() > 1 and
+          pred = call.getSelectorFunction(index).getReturn().getARhs() and
+          succ = call.getLastParameter().getParameter(index).getAnImmediateUse()
+        )
+        or
+        // The result of the last callback is the final result
+        exists(CreateSelectorCall call |
+          pred = call.getLastParameter().getReturn().getARhs() and
+          succ = call
+        )
       }
     }
   }
