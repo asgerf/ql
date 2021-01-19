@@ -645,6 +645,8 @@ private class RouteParamSource extends RemoteFlowSource {
   }
 
   override string getSourceType() { result = "$routeParams" }
+
+  override predicate isFromClientSideUrl(string part) { part = "path" }
 }
 
 /**
