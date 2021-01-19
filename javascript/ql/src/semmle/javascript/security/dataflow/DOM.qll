@@ -40,11 +40,14 @@ predicate isDocument(Expr e) { DOM::documentRef().flowsToExpr(e) }
 predicate isDocumentURL(Expr e) { e.flow() = DOM::locationSource() }
 
 /**
+ * DEPRECATED. In most cases, a sanitizer based on this predicate can be removed, as
+ * taint tracking no longer step through the properties of the location object by default.
+ *
  * Holds if `pacc` accesses a part of `document.location` that is
  * not considered user-controlled, that is, anything except
  * `href`, `hash` and `search`.
  */
-predicate isSafeLocationProperty(PropAccess pacc) {
+deprecated predicate isSafeLocationProperty(PropAccess pacc) {
   exists(string prop | pacc = DOM::locationRef().getAPropertyRead(prop).asExpr() |
     prop != "href" and prop != "hash" and prop != "search"
   )
@@ -241,4 +244,24 @@ private class WindowNameAccess extends RemoteFlowSource {
   }
 
   override string getSourceType() { result = "Window name" }
+}
+
+private class WindowLocationFlowSource extends RemoteFlowSource {
+  string part;
+
+  WindowLocationFlowSource() {
+    this = DOM::locationSource() and part = "url"
+    or
+    // Add separate sources for the properties of window.location as they are excluded
+    // from the default taint steps.
+    this = DOM::locationRef().getAPropertyRead("hash") and part = "fragment"
+    or
+    this = DOM::locationRef().getAPropertyRead("search") and part = "query"
+    or
+    this = DOM::locationRef().getAPropertyRead("href") and part = "url"
+  }
+
+  override predicate isFromClientSideUrl(string part_) { part_ = part }
+
+  override string getSourceType() { result = "Window location" }
 }

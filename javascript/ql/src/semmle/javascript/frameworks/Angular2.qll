@@ -77,46 +77,61 @@ module Angular2 {
   }
 
   /** Gets a reference to a `ParamMap` object, usually containing values from the URL. */
-  DataFlow::SourceNode paramMap() {
-    result.hasUnderlyingType("@angular/router", "ParamMap")
+  private DataFlow::SourceNode paramMap(string part) {
+    result.hasUnderlyingType("@angular/router", "ParamMap") and part = "path"
     or
-    result = activatedRouteProp(["paramMap", "queryParamMap"])
+    result = activatedRouteProp("paramMap") and part = "path"
     or
-    result = urlSegment().getAPropertyRead("parameterMap")
+    result = activatedRouteProp("queryParamMap") and part = "query"
+    or
+    result = urlSegment().getAPropertyRead("parameterMap") and part = "path"
+  }
+
+  /** Gets a reference to a `ParamMap` object, usually containing values from the URL. */
+  DataFlow::SourceNode paramMap() { result = paramMap(_) }
+
+  /** Gets a reference to a `Params` object, usually containing values from the URL. */
+  private DataFlow::SourceNode paramDictionaryObject(string part) {
+    result.hasUnderlyingType("@angular/router", "Params") and
+    part = "path" and
+    not result instanceof DataFlow::ObjectLiteralNode // ignore object literals found by contextual typing
+    or
+    result = activatedRouteProp("params") and part = "path"
+    or
+    result = activatedRouteProp("queryParams") and part = "query"
+    or
+    result = paramMap(part).getAPropertyRead("params")
+    or
+    result = urlSegment().getAPropertyRead("parameters") and part = "path"
   }
 
   /** Gets a reference to a `Params` object, usually containing values from the URL. */
-  DataFlow::SourceNode paramDictionaryObject() {
-    result.hasUnderlyingType("@angular/router", "Params") and
-    not result instanceof DataFlow::ObjectLiteralNode // ignore object literals found by contextual typing
-    or
-    result = activatedRouteProp(["params", "queryParams"])
-    or
-    result = paramMap().getAPropertyRead("params")
-    or
-    result = urlSegment().getAPropertyRead("parameters")
-  }
+  DataFlow::SourceNode paramDictionaryObject() { result = paramDictionaryObject(_) }
 
   /**
    * A value from `@angular/router` derived from the URL.
    */
   class AngularSource extends RemoteFlowSource {
+    string part;
+
     AngularSource() {
-      this = paramMap().getAMethodCall(["get", "getAll"])
+      this = paramMap(part).getAMethodCall(["get", "getAll"])
       or
-      this = paramDictionaryObject()
+      this = paramDictionaryObject(part)
       or
-      this = activatedRouteProp("fragment")
+      this = activatedRouteProp("fragment") and part = "fragment"
       or
-      this = urlSegment().getAPropertyRead("path")
+      this = urlSegment().getAPropertyRead("path") and part = "path"
       or
       // Note that Router.url and RouterStateSnapshot.url are strings, not UrlSegment[]
-      this = router().getAPropertyRead("url")
+      this = router().getAPropertyRead("url") and part = "url"
       or
-      this = routerStateSnapshot().getAPropertyRead("url")
+      this = routerStateSnapshot().getAPropertyRead("url") and part = "url"
     }
 
     override string getSourceType() { result = "Angular route parameter" }
+
+    override predicate isFromClientSideUrl(string part_) { part_ = part }
   }
 
   /** Gets a reference to a `DomSanitizer` object. */

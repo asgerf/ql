@@ -15,6 +15,22 @@ abstract class RemoteFlowSource extends DataFlow::Node {
    * Holds if this can be a user-controlled object, such as a JSON object parsed from user-controlled data.
    */
   predicate isUserControlledObject() { none() }
+
+  /**
+   * Holds if this refers to a part of the client side URL in a web application, such as `window.location`.
+   *
+   * If the value refers to (part of) the path, query, or fragment, `part` takes the value `path`, `query`,
+   * or `fragment`, respectively. Otherwise `part` takes the value `url`.
+   *
+   * Note that the scheme and hostname of a client side URL are generally never considered to be user input,
+   * and so `part` is never bound to something like `host` or `scheme`.
+   */
+  predicate isFromClientSideUrl(string part) { none() }
+
+  /**
+   * Holds if this refers to a part of the client side URL in a web application, such as `window.location`.
+   */
+  final predicate isFromClientSideUrl() { isFromClientSideUrl(_) }
 }
 
 /**
