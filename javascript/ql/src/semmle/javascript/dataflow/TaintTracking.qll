@@ -294,30 +294,35 @@ module TaintTracking {
 
   /**
    * A taint propagating data flow edge for assignments of the form `o[k] = v`, where
-   * `k` is not a constant and `o` refers to some object literal; in this case, we consider
-   * taint to flow from `v` to that object literal.
+   * one of the following holds:
    *
-   * The rationale for this heuristic is that if properties of `o` are accessed by
-   * computed (that is, non-constant) names, then `o` is most likely being treated as
-   * a map, not as a real object. In this case, it makes sense to consider the entire
-   * map to be tainted as soon as one of its entries is.
+   * - `k` is not a constant and `o` refers to some object literal. The rationale
+   *   here is that `o` is most likely being used like a dictionary object.
+   *
+   * - `k` refers to `o.length`, that is, the assignment is of form `o[o.length] = v`.
+   *   In this case, the assignment behaves like `o.push(v)`.
    */
-  private class DictionaryTaintStep extends AdditionalTaintStep {
-    DictionaryTaintStep() { dictionaryTaintStep(_, this) }
+  private class ComputedPropWriteTaintStep extends AdditionalTaintStep {
+    ComputedPropWriteTaintStep() { computedPropWriteTaintStep(_, this) }
 
     override predicate step(DataFlow::Node pred, DataFlow::Node succ) {
       succ = this and
-      dictionaryTaintStep(pred, succ)
+      computedPropWriteTaintStep(pred, succ)
     }
   }
 
-  /** Holds if there is a step `pred -> succ` used by `DictionaryTaintStep`. */
-  private predicate dictionaryTaintStep(DataFlow::Node pred, DataFlow::ObjectLiteralNode succ) {
+  /** Holds if there is a step `pred -> succ` used by `ComputedPropWriteTaintStep`. */
+  private predicate computedPropWriteTaintStep(DataFlow::Node pred, DataFlow::SourceNode succ) {
     exists(AssignExpr assgn, IndexExpr idx |
       assgn.getTarget() = idx and
       succ.flowsToExpr(idx.getBase()) and
       not exists(idx.getPropertyName()) and
       pred = DataFlow::valueNode(assgn.getRhs())
+    |
+      succ instanceof DataFlow::ObjectLiteralNode
+      or
+      // `x[x.length] = y` behaves like `x.push(y)`
+      succ.getAPropertyRead("length").flowsToExpr(idx.getPropertyNameExpr())
     )
   }
 
