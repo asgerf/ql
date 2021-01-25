@@ -788,6 +788,18 @@ module API {
         )
       )
       or
+      exists(ObjectExpr obj |
+        obj = trackDefNode(nd, t.continue()).asExpr() and
+        result =
+          obj.getAProperty()
+              .(SpreadProperty)
+              .getInit()
+              .(SpreadElement)
+              .getOperand()
+              .flow()
+              .getALocalSource()
+      )
+      or
       exists(DataFlow::TypeBackTracker t2 | result = trackDefNode(nd, t2).backtrack(t2, t))
     }
 
