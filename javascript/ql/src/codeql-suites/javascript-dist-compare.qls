@@ -1,0 +1,21 @@
+- description: Standard Code Scanning queries for JavaScript
+- qlpack: codeql-javascript
+- include:
+    kind:
+    - problem
+    - path-problem
+    precision:
+    - medium
+    - high
+    - very-high
+    problem.severity:
+    - error
+    - warning
+    tags contain:
+    - security
+- include:
+    kind:
+    - problem
+    - path-problem
+    tags contain:
+    - diagnostics-internal
