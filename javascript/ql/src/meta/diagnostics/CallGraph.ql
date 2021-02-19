@@ -4,7 +4,7 @@
  * @kind problem
  * @problem.severity recommendation
  * @id js/diagnostics/call-graph
- * @tags diagnostics-internal
+ * @tags diagnostics-disabled
  * @precision very-low
  */
 
