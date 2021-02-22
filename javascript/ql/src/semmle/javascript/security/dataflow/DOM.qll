@@ -231,37 +231,36 @@ private class PostMessageEventParameter extends RemoteFlowSource {
  * An access to `window.name`, which can be controlled by the opener of the window,
  * even if the window is opened from a foreign domain.
  */
-private class WindowNameAccess extends RemoteFlowSource {
+private class WindowNameAccess extends ClientSideRemoteFlowSource {
   WindowNameAccess() {
-    this = DataFlow::globalObjectRef().getAPropertyRead("name")
-    or
-    // Reference to `name` on a container that does not assign to it.
-    this.asExpr().(GlobalVarAccess).getName() = "name" and
-    not exists(VarDef def |
-      def.getAVariable().(GlobalVariable).getName() = "name" and
-      def.getContainer() = this.asExpr().getContainer()
+    kind.isWindowName() and
+    (
+      this = DataFlow::globalObjectRef().getAPropertyRead("name")
+      or
+      // Reference to `name` on a container that does not assign to it.
+      this.asExpr().(GlobalVarAccess).getName() = "name" and
+      not exists(VarDef def |
+        def.getAVariable().(GlobalVariable).getName() = "name" and
+        def.getContainer() = this.asExpr().getContainer()
+      )
     )
   }
 
   override string getSourceType() { result = "Window name" }
 }
 
-private class WindowLocationFlowSource extends RemoteFlowSource {
-  string part;
-
+private class WindowLocationFlowSource extends ClientSideRemoteFlowSource {
   WindowLocationFlowSource() {
-    this = DOM::locationSource() and part = "url"
+    this = DOM::locationSource() and kind.isUrl()
     or
     // Add separate sources for the properties of window.location as they are excluded
     // from the default taint steps.
-    this = DOM::locationRef().getAPropertyRead("hash") and part = "fragment"
+    this = DOM::locationRef().getAPropertyRead("hash") and kind.isFragment()
     or
-    this = DOM::locationRef().getAPropertyRead("search") and part = "query"
+    this = DOM::locationRef().getAPropertyRead("search") and kind.isQuery()
     or
-    this = DOM::locationRef().getAPropertyRead("href") and part = "url"
+    this = DOM::locationRef().getAPropertyRead("href") and kind.isUrl()
   }
-
-  override predicate isFromClientSideUrl(string part_) { part_ = part }
 
   override string getSourceType() { result = "Window location" }
 }

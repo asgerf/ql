@@ -30,7 +30,7 @@ module CommandInjection {
   class RemoteFlowSourceAsSource extends Source {
     RemoteFlowSourceAsSource() {
       this instanceof RemoteFlowSource and
-      not this.(RemoteFlowSource).isFromClientSideUrl()
+      not this instanceof ClientSideRemoteFlowSource
     }
 
     override string getSourceType() { result = "a user-provided value" }

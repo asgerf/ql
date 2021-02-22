@@ -40,11 +40,11 @@ module ClientSideUrlRedirect {
   class RemoteFlowSourceAsSource extends Source {
     RemoteFlowSourceAsSource() {
       this instanceof RemoteFlowSource and
-      not this.(RemoteFlowSource).isFromClientSideUrl("path")
+      not this.(ClientSideRemoteFlowSource).getKind().isPath()
     }
 
     override DataFlow::FlowLabel getAFlowLabel() {
-      if this.(RemoteFlowSource).isFromClientSideUrl("url")
+      if this.(ClientSideRemoteFlowSource).getKind().isUrl()
       then result instanceof DocumentUrl
       else result.isTaint()
     }
