@@ -9,7 +9,7 @@ import semmle.javascript.security.dataflow.DOM
 /** A data flow source of remote user input. */
 cached
 abstract class RemoteFlowSource extends DataFlow::Node {
-  /** Gets a string that describes the type of this remote flow source. */
+  /** Gets a human-readable string that describes the type of this remote flow source. */
   cached
   abstract string getSourceType();
 
@@ -18,22 +18,58 @@ abstract class RemoteFlowSource extends DataFlow::Node {
    */
   cached
   predicate isUserControlledObject() { none() }
+}
+
+/**
+ * A type of remote flow source that is specific to the browser environment.
+ */
+class ClientSideRemoteFlowKind extends string {
+  ClientSideRemoteFlowKind() { this = ["query", "fragment", "path", "url", "name"] }
 
   /**
-   * Holds if this refers to a part of the client side URL in a web application, such as `window.location`.
-   *
-   * If the value refers to (part of) the path, query, or fragment, `part` takes the value `path`, `query`,
-   * or `fragment`, respectively. Otherwise `part` takes the value `url`.
-   *
-   * Note that the scheme and hostname of a client side URL are generally never considered to be user input,
-   * and so `part` is never bound to something like `host` or `scheme`.
+   * Holds if this is the `query` kind, describing sources derived from the query parameters of the browser URL,
+   * such as `location.search`.
    */
-  predicate isFromClientSideUrl(string part) { none() }
+  predicate isQuery() { this = "query" }
 
   /**
-   * Holds if this refers to a part of the client side URL in a web application, such as `window.location`.
+   * Holds if this is the `frgament` kind, describing sources derived from the fragment part of the browser URL,
+   * such as `location.hash`.
    */
-  final predicate isFromClientSideUrl() { isFromClientSideUrl(_) }
+  predicate isFragment() { this = "fragment" }
+
+  /**
+   * Holds if this is the `path` kind, describing sources derived from the pathname of the browser URL,
+   * such as `location.pathname`.
+   */
+  predicate isPath() { this = "path" }
+
+  /**
+   * Holds if this is the `url` kind, describing sources derived from the browser URL,
+   * where the untrusted part of the URL is prefixed by trusted data, such as the scheme and hostname.
+   */
+  predicate isUrl() { this = "url" }
+
+  /** Holds if this is the `query` or `fragment` kind. */
+  predicate isQueryOrFragment() { this.isQuery() or this.isFragment() }
+
+  /** Holds if this is the `path`, `query`, or `fragment` kind. */
+  predicate isPathOrQueryOrFragment() { this.isPath() or this.isQuery() or this.isFragment() }
+
+  /** Holds if this is the `path` or `url` kind. */
+  predicate isPathOrUrl() { this.isPath() or this.isUrl() }
+
+  /** Holds if this is the `name` kind, describing sources derived from the window name, such as `window.name`. */
+  predicate isWindowName() { this = "name" }
+}
+
+/**
+ * A source of remote input in a web browser environment.
+ */
+abstract class ClientSideRemoteFlowSource extends RemoteFlowSource {
+  ClientSideRemoteFlowKind kind;
+
+  final ClientSideRemoteFlowKind getKind() { result = kind }
 }
 
 /**

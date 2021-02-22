@@ -560,7 +560,7 @@ module TaintedPath {
     RemoteFlowSourceAsSource() {
       exists(RemoteFlowSource src |
         this = src and
-        not src.isFromClientSideUrl(_)
+        not src instanceof ClientSideRemoteFlowSource
       )
     }
   }

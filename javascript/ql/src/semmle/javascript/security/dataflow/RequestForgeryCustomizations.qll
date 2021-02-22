@@ -37,7 +37,7 @@ module RequestForgery {
       // Reduce FPs by excluding sources from client-side path or URL
       exists(RemoteFlowSource src |
         this = src and
-        not src.isFromClientSideUrl(["path", "url"])
+        not src.(ClientSideRemoteFlowSource).getKind().isPathOrUrl()
       )
     }
   }

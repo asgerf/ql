@@ -239,7 +239,7 @@ module TaintTracking {
   /** Gets a data flow node referring to the client side URL. */
   private DataFlow::SourceNode clientSideUrlRef(DataFlow::TypeTracker t) {
     t.start() and
-    result.(RemoteFlowSource).isFromClientSideUrl("url")
+    result.(ClientSideRemoteFlowSource).getKind().isUrl()
     or
     exists(DataFlow::TypeTracker t2 | result = clientSideUrlRef(t2).track(t2, t))
   }

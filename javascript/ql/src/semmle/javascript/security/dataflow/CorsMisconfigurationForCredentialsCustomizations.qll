@@ -31,7 +31,7 @@ module CorsMisconfigurationForCredentials {
   class RemoteFlowSourceAsSource extends Source {
     RemoteFlowSourceAsSource() {
       this instanceof RemoteFlowSource and
-      not this.(RemoteFlowSource).isFromClientSideUrl()
+      not this instanceof ClientSideRemoteFlowSource
     }
   }
 
