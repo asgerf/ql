@@ -98,11 +98,13 @@ class TypeTracker extends TTypeTracker {
    * Holds if this is the starting point of type tracking
    * when tracking a parameter into a call, but not out of it.
    */
+  pragma[nomagic]
   predicate call() { hasCall = true and prop = "" }
 
   /**
    * Holds if this is the end point of type tracking.
    */
+  pragma[nomagic]
   predicate end() { prop = "" }
 
   /**
@@ -172,6 +174,7 @@ module TypeTracker {
   /**
    * Gets a valid end point of type tracking.
    */
+  pragma[inline]
   TypeTracker end() { result.end() }
 }
 
@@ -244,11 +247,13 @@ class TypeBackTracker extends TTypeBackTracker {
   /**
    * Holds if this is the starting point of type tracking.
    */
+  pragma[nomagic]
   predicate start() { hasReturn = false and prop = "" }
 
   /**
    * Holds if this is the end point of type tracking.
    */
+  pragma[nomagic]
   predicate end() { prop = "" }
 
   /**
@@ -318,6 +323,7 @@ module TypeBackTracker {
   /**
    * Gets a valid end point of type back-tracking.
    */
+  pragma[inline]
   TypeBackTracker end() { result.end() }
 }
 

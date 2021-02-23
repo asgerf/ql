@@ -204,9 +204,14 @@ module Firebase {
         result = getARouteHandler(DataFlow::TypeBackTracker::end())
       }
 
+      pragma[noinline]
+      private DataFlow::SourceNode getARouteHandlerSource() {
+        result = getArgument(0).flow().getALocalSource()
+      }
+
       private DataFlow::SourceNode getARouteHandler(DataFlow::TypeBackTracker t) {
         t.start() and
-        result = getArgument(0).flow().getALocalSource()
+        result = getARouteHandlerSource()
         or
         exists(DataFlow::TypeBackTracker t2 | result = getARouteHandler(t2).backtrack(t2, t))
       }

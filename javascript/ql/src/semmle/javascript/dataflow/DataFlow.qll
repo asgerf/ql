@@ -43,7 +43,10 @@ module DataFlow {
     /**
      * Gets a source node from which data may flow to this node in zero or more local steps.
      */
-    SourceNode getALocalSource() { result.flowsTo(this) }
+    pragma[inline]
+    SourceNode getALocalSource() {
+      DataFlow::Cached::hasLocalSource(this, pragma[only_bind_into](result))
+    }
 
     /**
      * Holds if the flow information for this node is incomplete.
@@ -64,6 +67,7 @@ module DataFlow {
     AnalyzedNode analyze() { result = this }
 
     /** Gets the expression corresponding to this data flow node, if any. */
+    pragma[inline]
     Expr asExpr() { this = TValueNode(result) }
 
     /**

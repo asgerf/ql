@@ -421,8 +421,12 @@ private DataFlow::SourceNode globalVariable(string name) {
  * require('global/document')
  * ```
  */
-pragma[nomagic]
 DataFlow::SourceNode globalVarRef(string name) {
+  pragma[only_bind_into](result) = globalVarRefAux(name)
+}
+
+pragma[nomagic]
+private DataFlow::SourceNode globalVarRefAux(string name) {
   result = globalVariable(name)
   or
   result = globalObjectRef().getAPropertyReference(name)
@@ -464,6 +468,9 @@ DataFlow::SourceNode globalVarRef(string name) {
  */
 class FunctionNode extends DataFlow::ValueNode, DataFlow::SourceNode {
   override Function astNode;
+
+  pragma[nomagic]
+  FunctionNode() { any() }
 
   /** Gets the `i`th parameter of this function. */
   ParameterNode getParameter(int i) { result = DataFlow::parameterNode(astNode.getParameter(i)) }
@@ -727,14 +734,17 @@ module ModuleImportNode {
   }
 }
 
+cached
+private ModuleImportNode moduleImportCached(string path) { result.getPath() = path }
+
 /**
  * Gets a (default) import of the module with the given path, such as `require("fs")`
  * or `import * as fs from "fs"`.
  *
  * This predicate can be extended by subclassing `ModuleImportNode::Range`.
  */
-cached
-ModuleImportNode moduleImport(string path) { result.getPath() = path }
+pragma[inline]
+ModuleImportNode moduleImport(string path) { pragma[only_bind_into](result).getPath() = path }
 
 /**
  * Gets a (default) import of the given dependency `dep`, such as

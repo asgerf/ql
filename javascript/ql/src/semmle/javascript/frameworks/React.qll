@@ -415,6 +415,15 @@ private class HeuristicReactPreactComponent extends ClassDefinition, PreactCompo
   }
 }
 
+pragma[nomagic]
+private DataFlow::CallNode reactClassCreationCall() {
+  // React.createClass({...})
+  result = react().getAMethodCall("createClass")
+  or
+  // require('create-react-class')({...})
+  result = DataFlow::moduleImport("create-react-class").getACall()
+}
+
 /**
  * A legacy React component implemented using `React.createClass` or `create-react-class`.
  */
@@ -422,14 +431,7 @@ class ES5Component extends ReactComponent, ObjectExpr {
   DataFlow::CallNode create;
 
   ES5Component() {
-    (
-      // React.createClass({...})
-      create = react().getAMethodCall("createClass")
-      or
-      // require('create-react-class')({...})
-      create = DataFlow::moduleImport("create-react-class").getACall()
-    ) and
-    create.getArgument(0).getALocalSource().asExpr() = this
+    reactClassCreationCall().getArgument(0).getALocalSource().asExpr() = this
   }
 
   override Function getInstanceMethod(string name) { result = getPropertyByName(name).getInit() }

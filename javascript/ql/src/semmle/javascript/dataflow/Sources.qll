@@ -196,7 +196,7 @@ class SourceNode extends DataFlow::Node {
  * Cached predicates used by the member predicates in `SourceNode`.
  */
 cached
-private module Cached {
+module Cached {
   /**
    * Holds if `source` is a `SourceNode` that can reach `sink` via local flow steps.
    *

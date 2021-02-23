@@ -224,9 +224,14 @@ module NodeJSLib {
       result = getARouteHandler(DataFlow::TypeBackTracker::end())
     }
 
+    pragma[noinline]
+    private DataFlow::SourceNode getARouteHandlerSource() {
+      result = handler.flow().getALocalSource()
+    }
+
     private DataFlow::SourceNode getARouteHandler(DataFlow::TypeBackTracker t) {
       t.start() and
-      result = handler.flow().getALocalSource()
+      result = getARouteHandlerSource()
       or
       exists(DataFlow::TypeBackTracker t2, DataFlow::SourceNode succ | succ = getARouteHandler(t2) |
         result = succ.backtrack(t2, t)
@@ -619,6 +624,7 @@ module NodeJSLib {
   /**
    * Gets a possibly promisified (using `util.promisify`) version of the input `callback`.
    */
+  pragma[inline]
   private DataFlow::SourceNode maybePromisified(DataFlow::SourceNode callback) {
     result = callback
     or
