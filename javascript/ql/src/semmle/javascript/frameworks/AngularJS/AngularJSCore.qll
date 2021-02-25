@@ -638,7 +638,6 @@ private class LocationFlowSource extends RemoteFlowSource {
  */
 private class RouteParamSource extends ClientSideRemoteFlowSource {
   RouteParamSource() {
-    kind.isPath() and
     exists(ServiceReference service |
       service.getName() = "$routeParams" and
       this = service.getAPropertyAccess(_)
@@ -646,6 +645,8 @@ private class RouteParamSource extends ClientSideRemoteFlowSource {
   }
 
   override string getSourceType() { result = "$routeParams" }
+
+  override ClientSideRemoteFlowKind getKind() { result.isPath() }
 }
 
 /**

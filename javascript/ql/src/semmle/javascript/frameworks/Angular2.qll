@@ -112,6 +112,8 @@ module Angular2 {
    * A value from `@angular/router` derived from the URL.
    */
   class AngularSource extends ClientSideRemoteFlowSource {
+    ClientSideRemoteFlowKind kind;
+
     AngularSource() {
       this = paramMap(kind).getAMethodCall(["get", "getAll"])
       or
@@ -128,6 +130,8 @@ module Angular2 {
     }
 
     override string getSourceType() { result = "Angular route parameter" }
+
+    override ClientSideRemoteFlowKind getKind() { result = kind }
   }
 
   /** Gets a reference to a `DomSanitizer` object. */

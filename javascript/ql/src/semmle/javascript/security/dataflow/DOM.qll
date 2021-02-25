@@ -232,25 +232,26 @@ private class PostMessageEventParameter extends RemoteFlowSource {
  * even if the window is opened from a foreign domain.
  */
 private class WindowNameAccess extends ClientSideRemoteFlowSource {
-    pragma[nomagic, noinline]  
-    WindowNameAccess() {
-    kind.isWindowName() and
-    (
-      this = DataFlow::globalObjectRef().getAPropertyRead("name")
-      or
-      // Reference to `name` on a container that does not assign to it.
-      this.asExpr().(GlobalVarAccess).getName() = "name" and
-      not exists(VarDef def |
-        def.getAVariable().(GlobalVariable).getName() = "name" and
-        def.getContainer() = this.asExpr().getContainer()
-      )
+  pragma[nomagic, noinline]  
+  WindowNameAccess() {
+    this = DataFlow::globalObjectRef().getAPropertyRead("name")
+    or
+    // Reference to `name` on a container that does not assign to it.
+    this.asExpr().(GlobalVarAccess).getName() = "name" and
+    not exists(VarDef def |
+      def.getAVariable().(GlobalVariable).getName() = "name" and
+      def.getContainer() = this.asExpr().getContainer()
     )
   }
 
   override string getSourceType() { result = "Window name" }
+
+  override ClientSideRemoteFlowKind getKind() { result.isWindowName() }
 }
 
 private class WindowLocationFlowSource extends ClientSideRemoteFlowSource {
+  ClientSideRemoteFlowKind kind;
+
   WindowLocationFlowSource() {
     this = DOM::locationSource() and kind.isUrl()
     or
@@ -264,4 +265,6 @@ private class WindowLocationFlowSource extends ClientSideRemoteFlowSource {
   }
 
   override string getSourceType() { result = "Window location" }
+
+  override ClientSideRemoteFlowKind getKind() { result = kind }
 }

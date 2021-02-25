@@ -687,6 +687,8 @@ private DataFlow::SourceNode reactRouterDom() {
 }
 
 private class ReactRouterSource extends ClientSideRemoteFlowSource {
+  ClientSideRemoteFlowKind kind;
+
   ReactRouterSource() {
     this = reactRouterDom().getAMemberCall("useParams") and kind.isPath()
     or
@@ -700,6 +702,8 @@ private class ReactRouterSource extends ClientSideRemoteFlowSource {
   }
 
   override string getSourceType() { result = "react-router path parameters" }
+
+  override ClientSideRemoteFlowKind getKind() { result = kind }
 }
 
 /**
