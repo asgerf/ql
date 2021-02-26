@@ -72,6 +72,7 @@ private import javascript
 private import internal.FlowSteps
 private import internal.AccessPaths
 private import internal.CallGraphs
+private import internal.PrecomputedTaintTracking
 
 /**
  * A data flow tracking configuration for finding inter-procedural paths from
@@ -1510,12 +1511,48 @@ private predicate onPathStep(
   flowStep(nd, id(cfg), mid, stepSummary)
 }
 
+pragma[noinline]
+private predicate isLiveBase() {
+  exists(DataFlow::Configuration cfg |
+    isSource(_, cfg, _) and isSink(_, cfg, _)
+  )
+}
+
+pragma[noinline]
+private predicate isLive1() {
+  isSource(PrecomputedTaint::getAnUnseenNode(), _, _)
+}
+
+pragma[noinline]
+private predicate isLive2() {
+  isSink(PrecomputedTaint::getATaintedNode(), _, _)
+}
+
+pragma[noinline]
+private predicate isLive3() {
+  exists(DataFlow::Configuration cfg, DataFlow::Node pred, DataFlow::Node succ |
+    PrecomputedTaint::getATaintedNode() = pragma[only_bind_into](pred) and
+    (
+      cfg.isAdditionalFlowStep(pred, succ)
+      or
+      cfg.isAdditionalFlowStep(pred, succ, _, _)
+    ) and
+    succ = pragma[only_bind_into](PrecomputedTaint::getAnUnseenNode())
+  )
+}
+
 /**
  * Holds if there is a configuration that has at least one source and at least one sink.
  */
 pragma[noinline]
 private predicate isLive() {
-  exists(DataFlow::Configuration cfg | isSource(_, cfg, _) and isSink(_, cfg, _))
+  isLiveBase() and (
+    isLive1()
+    or
+    isLive2()
+    or
+    isLive3()
+  )
 }
 
 /**
