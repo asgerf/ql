@@ -17,20 +17,33 @@ private module Micro {
     result = moduleImport("micro").getACall().getArgument(0)
   }
 
+  pragma[noinline]
+  private DataFlow::SourceNode microRouteHandlerSinkAux() {
+    result = microRouteHandlerSink().getALocalSource()
+  }
+
+  private class Transformer extends DataFlow::CallNode {
+    pragma[noinline]
+    Transformer() {
+      this = moduleImport("micro-compress").getACall()
+      or
+      this instanceof Bluebird::BluebirdCoroutineDefinition
+    }
+
+    pragma[noinline]
+    DataFlow::SourceNode getInputSource() { result = getArgument(0).getALocalSource() }
+  }
+
   /** Gets a data flow node interpreted as a route handler. */
   private DataFlow::SourceNode microRouteHandler(DataFlow::TypeBackTracker t) {
     t.start() and
-    result = microRouteHandlerSink().getALocalSource()
+    result = microRouteHandlerSinkAux()
     or
     exists(DataFlow::TypeBackTracker t2 | result = microRouteHandler(t2).backtrack(t2, t))
     or
-    exists(DataFlow::CallNode transformer |
-      transformer = moduleImport("micro-compress").getACall()
-      or
-      transformer instanceof Bluebird::BluebirdCoroutineDefinition
-    |
+    exists(Transformer transformer |
       microRouteHandler(t.continue()) = transformer and
-      result = transformer.getArgument(0).getALocalSource()
+      result = transformer.getInputSource()
     )
   }
 

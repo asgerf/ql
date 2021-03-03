@@ -37,11 +37,13 @@ abstract class ReactComponent extends ASTNode {
   /**
    * Gets the abstract value that represents this component.
    */
+  pragma[noinline]
   abstract AbstractValue getAbstractComponent();
 
   /**
    * Gets the function that instantiates this component when invoked.
    */
+  pragma[noinline]
   abstract DataFlow::SourceNode getComponentCreatorSource();
 
   /**
@@ -415,22 +417,22 @@ private class HeuristicReactPreactComponent extends ClassDefinition, PreactCompo
   }
 }
 
+pragma[nomagic]
+private DataFlow::CallNode reactClassCreationCall() {
+  // React.createClass({...})
+  result = react().getAMethodCall("createClass")
+  or
+  // require('create-react-class')({...})
+  result = DataFlow::moduleImport("create-react-class").getACall()
+}
+
 /**
  * A legacy React component implemented using `React.createClass` or `create-react-class`.
  */
 class ES5Component extends ReactComponent, ObjectExpr {
   DataFlow::CallNode create;
 
-  ES5Component() {
-    (
-      // React.createClass({...})
-      create = react().getAMethodCall("createClass")
-      or
-      // require('create-react-class')({...})
-      create = DataFlow::moduleImport("create-react-class").getACall()
-    ) and
-    create.getArgument(0).getALocalSource().asExpr() = this
-  }
+  ES5Component() { reactClassCreationCall().getArgument(0).getALocalSource().asExpr() = this }
 
   override Function getInstanceMethod(string name) { result = getPropertyByName(name).getInit() }
 
@@ -444,7 +446,7 @@ class ES5Component extends ReactComponent, ObjectExpr {
 
   private DataFlow::SourceNode getAComponentCreatorReference(DataFlow::TypeTracker t) {
     t.start() and
-    result = create
+    result = getComponentCreatorSource()
     or
     exists(DataFlow::TypeTracker t2 | result = getAComponentCreatorReference(t2).track(t2, t))
   }

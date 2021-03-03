@@ -118,16 +118,18 @@ module Express {
       result = getARouteHandler(DataFlow::TypeBackTracker::end())
     }
 
+    pragma[noinline]
+    private DataFlow::SourceNode getARouteHandlerSource() {
+      result = getARouteHandlerExpr().flow().getALocalSource()
+    }
+
     private DataFlow::SourceNode getARouteHandler(DataFlow::TypeBackTracker t) {
       t.start() and
-      result = getARouteHandlerExpr().flow().getALocalSource()
+      result = getARouteHandlerSource()
       or
-      exists(DataFlow::TypeBackTracker t2, DataFlow::SourceNode succ | succ = getARouteHandler(t2) |
-        result = succ.backtrack(t2, t)
-        or
-        HTTP::routeHandlerStep(result, succ) and
-        t = t2
-      )
+      exists(DataFlow::TypeBackTracker t2 | result = getARouteHandler(t2).backtrack(t2, t))
+      or
+      HTTP::routeHandlerStep(result, getARouteHandler(t))
     }
 
     override Expr getServer() { result.(Application).getARouteHandler() = getARouteHandler() }
