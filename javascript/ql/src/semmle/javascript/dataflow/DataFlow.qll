@@ -64,6 +64,7 @@ module DataFlow {
     AnalyzedNode analyze() { result = this }
 
     /** Gets the expression corresponding to this data flow node, if any. */
+    pragma[inline]
     Expr asExpr() { this = TValueNode(result) }
 
     /**
@@ -1269,6 +1270,10 @@ module DataFlow {
    */
   pragma[inline]
   ExprNode exprNode(Expr e) { result = valueNode(e) }
+
+  /** Gets a data flow node holding the value read by the given property pattern. */
+  pragma[inline]
+  Node propertyPatternNode(PropertyPattern prop) { result = TPropNode(prop) }
 
   /** Gets the data flow node corresponding to `ssa`. */
   SsaDefinitionNode ssaDefinitionNode(SsaDefinition ssa) { result = TSsaDefNode(ssa) }

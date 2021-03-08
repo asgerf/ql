@@ -597,7 +597,7 @@ module JSDoc {
       |
         exists(PropertyPattern p |
           ref = p.getValuePattern() and
-          result.getAstNode() = p
+          result = DataFlow::propertyPatternNode(p)
         )
         or
         result = DataFlow::valueNode(def.(Stmt))
