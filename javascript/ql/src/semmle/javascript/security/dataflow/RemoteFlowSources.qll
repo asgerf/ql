@@ -6,20 +6,6 @@ import javascript
 import semmle.javascript.frameworks.HTTP
 import semmle.javascript.security.dataflow.DOM
 
-/** A data flow source of remote user input. */
-cached
-abstract class RemoteFlowSource extends DataFlow::Node {
-  /** Gets a human-readable string that describes the type of this remote flow source. */
-  cached
-  abstract string getSourceType();
-
-  /**
-   * Holds if this can be a user-controlled object, such as a JSON object parsed from user-controlled data.
-   */
-  cached
-  predicate isUserControlledObject() { none() }
-}
-
 /**
  * A type of remote flow source that is specific to the browser environment.
  */
@@ -63,15 +49,34 @@ class ClientSideRemoteFlowKind extends string {
   predicate isWindowName() { this = "name" }
 }
 
-/**
- * A source of remote input in a web browser environment.
- */
 cached
-abstract class ClientSideRemoteFlowSource extends RemoteFlowSource {
-  /** Gets a string indicating what part of the browser environment this was derived from. */
+private module Cached {
+  /** A data flow source of remote user input. */
   cached
-  abstract ClientSideRemoteFlowKind getKind();
+  abstract class RemoteFlowSource extends DataFlow::Node {
+    /** Gets a human-readable string that describes the type of this remote flow source. */
+    cached
+    abstract string getSourceType();
+
+    /**
+     * Holds if this can be a user-controlled object, such as a JSON object parsed from user-controlled data.
+     */
+    cached
+    predicate isUserControlledObject() { none() }
+  }
+
+  /**
+   * A source of remote input in a web browser environment.
+   */
+  cached
+  abstract class ClientSideRemoteFlowSource extends RemoteFlowSource {
+    /** Gets a string indicating what part of the browser environment this was derived from. */
+    cached
+    abstract ClientSideRemoteFlowKind getKind();
+  }
 }
+
+import Cached
 
 /**
  * A specification of a remote flow source in a JSON file included in the database.
