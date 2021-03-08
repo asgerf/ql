@@ -66,8 +66,10 @@ class ClientSideRemoteFlowKind extends string {
 /**
  * A source of remote input in a web browser environment.
  */
+cached
 abstract class ClientSideRemoteFlowSource extends RemoteFlowSource {
   /** Gets a string indicating what part of the browser environment this was derived from. */
+  cached
   abstract ClientSideRemoteFlowKind getKind();
 }
 
